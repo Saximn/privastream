@@ -1,6 +1,6 @@
 task: detect
 mode: train
-model: yolo11s.pt
+model: runs_sg\yolo11_sg_plate\weights\last.pt
 data: ..\datasets\Roboflow\data.yaml
 epochs: 1
 time: null
@@ -14,7 +14,7 @@ device: '0'
 workers: 2
 project: runs_sg
 name: yolo11_sg_plate
-exist_ok: false
+exist_ok: true
 pretrained: true
 optimizer: auto
 verbose: true
