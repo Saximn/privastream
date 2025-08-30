@@ -1,0 +1,21 @@
+{
+  "run_name": "full_eval",
+  "timestamp": 1756582651.356998,
+  "total_images": 500,
+  "images_evaluated": 164,
+  "images_skipped": 336,
+  "region_precision": 0.5,
+  "region_recall": 0.5422222222222223,
+  "region_f1": 0.5202558635394458,
+  "pixel_coverage_avg": 0.6909940945124005,
+  "residual_ocr_rate": 0.02032520325203252,
+  "processing_time_sec": 46.65961480140686,
+  "parameters": {
+    "classifier_used": true,
+    "thr_bias": 0.0,
+    "conf_gate": 0.35,
+    "iou_thr": 0.5,
+    "min_area": 80,
+    "residual_ocr_enabled": true
+  }
+}
