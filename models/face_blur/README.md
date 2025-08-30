@@ -11,11 +11,11 @@ Make sure to install all required dependencies before running any scripts (good 
 
 ### Enroll Face
 ```bash
-python enroll_gpu.py --cam 0 --gpu_id 0 --det_size 960
+python enroll_face.py --cam 0 --gpu_id 0 --det_size 960
 ```
 
 ### Livestream
 ```bash
-python run_stream_gpu.py --source 0 --gpu_id 0 --det_size 960 --stride 1 --tta_every 0
+python run_stream.py --source 0 --gpu_id 0 --det_size 960 --stride 1 --tta_every 0
 ```
 
