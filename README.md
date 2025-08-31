@@ -69,45 +69,6 @@ It **detects and blurs** personally identifiable information (PII) across **vide
 
 ---
 
-## 📦 Repository Layout (suggested)
-
-```
-.
-├─ README.md
-├─ requirements.txt
-├─ config.yaml
-├─ scripts/
-│  ├─ run_live.py                 # unified run: live
-│  ├─ run_video.py                # unified run: file -> file
-│  └─ plate_blur.py               # standalone plate blur (YOLO best.pt)
-├─ src/
-│  ├─ io/
-│  │  └─ stream.py                # capture, writer, A/V mux
-│  ├─ video/
-│  │  ├─ scheduler.py             # downsample to target FPS (e.g., 4)
-│  │  ├─ analyzer.py              # merges model outputs
-│  │  ├─ blur.py                  # Gaussian / mosaic; confirm/hold
-│  │  └─ geometry.py              # boxes, IoU, utilities
-│  ├─ models/
-│  │  ├─ face.py                  # load face detector; infer(frame) -> boxes
-│  │  ├─ plate.py                 # YOLO plate detector; infer(frame) -> boxes
-│  │  └─ pii_text.py              # OCR + rules/ML; infer(frame) -> boxes
-│  └─ audio/
-│     ├─ whisper_runner.py        # chunking, STT
-│     └─ pii_tag_deberta.py       # PII token tagging, scheduling alignment
-├─ models/
-│  ├─ face_best.pt
-│  ├─ best.pt                     # license-plate model (YOLO)
-│  ├─ pii_clf.joblib              # char TF-IDF + LogisticRegression (text PII)
-│  └─ (whisper / DeBERTa weights as configured)
-└─ data/
-   └─ samples/
-      ├─ demo.mp4
-      └─ demo_audio.wav
-```
-
----
-
 ## ⚙️ Interfaces & Contracts
 
 ### Video model interface
