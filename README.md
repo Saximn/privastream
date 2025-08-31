@@ -67,44 +67,6 @@ It **detects and blurs** personally identifiable information (PII) across **vide
 > - **Output:** `(frame_id: int, boxes: List[Tuple[x1,y1,x2,y2]])`
 > - Coordinates are **pixel-space integers** in the original frame size.
 
----
-
-## 📦 Repository Layout (suggested)
-
-```
-.
-├─ README.md
-├─ requirements.txt
-├─ config.yaml
-├─ scripts/
-│  ├─ run_live.py                 # unified run: live
-│  ├─ run_video.py                # unified run: file -> file
-│  └─ plate_blur.py               # standalone plate blur (YOLO best.pt)
-├─ src/
-│  ├─ io/
-│  │  └─ stream.py                # capture, writer, A/V mux
-│  ├─ video/
-│  │  ├─ scheduler.py             # downsample to target FPS (e.g., 4)
-│  │  ├─ analyzer.py              # merges model outputs
-│  │  ├─ blur.py                  # Gaussian / mosaic; confirm/hold
-│  │  └─ geometry.py              # boxes, IoU, utilities
-│  ├─ models/
-│  │  ├─ face.py                  # load face detector; infer(frame) -> boxes
-│  │  ├─ plate.py                 # YOLO plate detector; infer(frame) -> boxes
-│  │  └─ pii_text.py              # OCR + rules/ML; infer(frame) -> boxes
-│  └─ audio/
-│     ├─ whisper_runner.py        # chunking, STT
-│     └─ pii_tag_deberta.py       # PII token tagging, scheduling alignment
-├─ models/
-│  ├─ face_best.pt
-│  ├─ best.pt                     # license-plate model (YOLO)
-│  ├─ pii_clf.joblib              # char TF-IDF + LogisticRegression (text PII)
-│  └─ (whisper / DeBERTa weights as configured)
-└─ data/
-   └─ samples/
-      ├─ demo.mp4
-      └─ demo_audio.wav
-```
 
 ---
 
@@ -288,3 +250,12 @@ BSD-3-Clause
 - OpenAI Whisper for speech-to-text
 - DeBERTa for token-level PII tagging
 - scikit-learn for lightweight text classifiers
+
+## Datasets 📊
+
+We relied on several community datasets and also built our own:
+
+- [@nbroad's PII-DD mistral-generated dataset](https://www.kaggle.com/datasets/nbroad/pii-dd-mistral-generated) — by far the most valuable external dataset. ⭐️
+- [@mpware's Mixtral-generated essays](https://www.kaggle.com/datasets/mpware/pii-mixtral8x7b-generated-essays).
+- A custom dataset of ~2k samples (using @minhsienweng's notebook as a starting point).  
+  This was released as external_data_v8.json and includes the nbroad dataset. 🔥
