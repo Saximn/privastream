@@ -1,7 +1,8 @@
-# Live Privacy Filter: Audio & Video PII Blurring
+# Live Privacy Filter - PrivaStream: Audio & Video PII Blurring
 
 A production-leaning, real-time **privacy filter** for livestreams and videos.  
 It **detects and blurs** personally identifiable information (PII) across **video** (faces, license plates, street/address text) and **audio** (spoken PII), with **temporal stabilization** and clean, modular interfaces.
+Built for TikTok Techjam 2025. 
 
 ---
 
