@@ -356,42 +356,6 @@ python scripts/benchmark.py --config configs/balanced.yaml --duration 60
 
 ---
 
----
-
-## 🧪 Testing
-
-### Running Tests
-
-```bash
-# Run component-specific tests
-python models/plate_blur/test_plate_detector.py
-python models/face_blur/test_face_detector.py
-python audio-processing/test_setup.py
-
-# Full integration tests
-python models/unified_bbox_test.py
-python scripts/test_pipeline.py
-
-# Performance benchmarks
-python scripts/benchmark.py --config configs/balanced.yaml
-```
-
-### Test Coverage
-
-Current test coverage: **87%**
-
-| Module | Coverage | Status |
-|--------|----------|--------|
-| Video Models | 92% | ✅ |
-| Audio Processing | 85% | ✅ |
-| Blur Engine | 90% | ✅ |
-| I/O Handlers | 82% | ⚠️ |
-| Utils | 95% | ✅ |
-
-
-
----
-
 ## 🙌 Acknowledgements
 
 - YOLO (Ultralytics) for object detection
