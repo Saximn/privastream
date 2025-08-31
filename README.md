@@ -106,12 +106,8 @@ python scripts/batch_process.py --input-dir data/samples/ --output-dir outputs/ 
 python scripts/run_live.py --mode live --source 0 --output rtmp://localhost:1935/live/stream
 ```
 
-**Web Demo Interface:**
-```bash
-cd web-demo-ui
-python app.py --port 8080 --gpu-id 0
-# Open http://localhost:8080 in your browser
-```
+**Web Demo Interface:**  
+[Web Demo Folder] (web-demo-ui/) 
 
 
 ---
