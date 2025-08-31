@@ -107,7 +107,7 @@ python scripts/run_live.py --mode live --source 0 --output rtmp://localhost:1935
 ```
 
 **Web Demo Interface:**  
-[Web Demo Folder] (web-demo-ui/) 
+[Web Demo Folder](web-demo-ui/)
 
 
 ---
