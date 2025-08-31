@@ -1,0 +1,11 @@
+run_name,image_id,img_path,skip,skip_reason,img_size,total_text_regions,TP,FP,FN,n_gt_pii,n_pred_pii,precision,recall,f1,pixel_coverage,residual_rate,classifier_used,thr_bias,conf_gate,iou_thr
+test_run,1,img_1.jpg,True,no_pii_gt,,0,0,0,0,0,0,0.0,0.0,0.0,0.0,,True,0.0,0.35,0.5
+test_run,2,img_10.jpg,False,,1280x720,9,0,0,1,1,4,0.0,0.0,0.0,1.0,0.0,True,0.0,0.35,0.5
+test_run,3,img_100.jpg,False,,1280x720,7,1,1,0,1,9,0.5,1.0,0.6666666666666666,0.9080091533180779,0.0,True,0.0,0.35,0.5
+test_run,4,img_101.jpg,True,no_pii_gt,,2,0,0,0,0,0,0.0,0.0,0.0,0.0,,True,0.0,0.35,0.5
+test_run,5,img_102.jpg,False,,1280x720,2,0,0,1,1,1,0.0,0.0,0.0,1.0,0.0,True,0.0,0.35,0.5
+test_run,6,img_103.jpg,True,no_pii_gt,,6,0,0,0,0,0,0.0,0.0,0.0,0.0,,True,0.0,0.35,0.5
+test_run,7,img_104.jpg,True,no_pii_gt,,4,0,0,0,0,0,0.0,0.0,0.0,0.0,,True,0.0,0.35,0.5
+test_run,8,img_105.jpg,True,no_pii_gt,,1,0,0,0,0,0,0.0,0.0,0.0,0.0,,True,0.0,0.35,0.5
+test_run,9,img_106.jpg,False,,1280x720,8,0,0,2,2,7,0.0,0.0,0.0,0.33436944937833035,0.0,True,0.0,0.35,0.5
+test_run,10,img_107.jpg,True,no_pii_gt,,8,0,0,0,0,0,0.0,0.0,0.0,0.0,,True,0.0,0.35,0.5

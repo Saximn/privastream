@@ -5,3 +5,5 @@ datasets
 *.png
 *.jpeg
 *.pt
+
+node_modules/
