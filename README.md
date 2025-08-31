@@ -277,7 +277,7 @@ python scripts/plate_blur.py --mode live --source 0 --weights models/best.pt --s
 
 ## 📝 License
 
-MIT (customize as needed).
+BSD-3-Clause
 
 ---
 
