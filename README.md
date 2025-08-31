@@ -256,31 +256,3 @@ We leverage a comprehensive collection of high-quality datasets to train our pri
 | **Text PII** | **25,000+** | Rule + ML validated | Multi-language |
 | **License Plates** | **8,500+** | Precision annotated | Singapore/SEA |
 
-### 🔒 **Data Privacy & Ethics**
-
-- **Synthetic Data Priority**: Majority of training data is AI-generated to protect real user privacy
-- **Anonymization**: All real-world data underwent strict PII removal before use
-- **License Compliance**: All datasets used under appropriate open-source licenses
-- **Bias Mitigation**: Diverse demographic representation across all training sets
-- **Regular Audits**: Quarterly reviews of dataset quality and ethical compliance
-
-### 📚 **Dataset Access & Reproduction**
-
-```bash
-# Download core datasets (requires Kaggle API)
-kaggle datasets download -d nbroad/pii-dd-mistral-generated
-kaggle datasets download -d mpware/pii-mixtral8x7b-generated-essays
-
-# Access our processed training data
-wget https://releases.privastream.ai/datasets/external_data_v8.json
-```
-
-**Citation Format:**
-```bibtex
-@dataset{privastream2025,
-  title={PrivaStream: Comprehensive PII Detection Dataset},
-  author={TikTok TechJam 2025 Team},
-  year={2025},
-  url={https://github.com/Saximn/tiktok-techjam-2025}
-}
-```
