@@ -1,7 +1,6 @@
 # Live Privacy Filter - PrivaStream: Audio & Video PII Blurring
 
-A production-leaning, real-time **privacy filter** for livestreams and videos.  
-It **detects and blurs** personally identifiable information (PII) across **video** (faces, license plates, street/address text) and **audio** (spoken PII), with **temporal stabilization** and clean, modular interfaces. Built for Tiktok Techjam 2025 Track 7.
+A production-leaning, real-time **privacy filter** for livestreams and videos. It **detects and blurs** personally identifiable information (PII) across **video** (faces, license plates, street/address text) and **audio** (spoken PII), with **temporal stabilization** and clean, modular interfaces. Built for Tiktok Techjam 2025 Track 7.
 
 ---
 
@@ -264,16 +263,6 @@ python app.py --port 8080 --gpu-id 0
 # Open http://localhost:8080 in your browser
 ```
 
----
-
-## 🧪 Evaluation
-
-- **Video**: Measure PII-F1 on a small labeled set of frames:
-  - Ground-truth boxes for faces/plates/street text
-  - Compare **Rules-only** vs **Hybrid (Rules ∨ tiny ML)** for text PII decisions
-- **Audio**: Per 5s window, precision/recall of PII-tagged tokens vs reference, plus AV alignment error (ms).
-- **Latency**:
-  - FPS (median, p95), and time breakdown (detector/recognizer/post)
 
 ---
 
@@ -328,14 +317,6 @@ Our models achieve **state-of-the-art performance** across all privacy detection
 - **Audio alignment**: `frame_id = floor(t * target_fps)`; expand to a small frame window for natural speech duration.
 - **Throughput**: use batched OCR and async queues between Scheduler → Analyzer → Blur Engine for higher FPS.
 
----
-
-## 🗺️ Roadmap
-
-- Multi-language street/address lexicons
-- ONNX export paths (YOLO, OCR, classifier) for mobile/embedded
-- Virtual camera output for streaming platforms (OBS/VT Cam)
-- Per-user ignore lists; UI for manual add/remove blur boxes
 
 ---
 
@@ -407,44 +388,11 @@ Current test coverage: **87%**
 | I/O Handlers | 82% | ⚠️ |
 | Utils | 95% | ✅ |
 
----
 
-### Development Setup
-
-```bash
-# Clone repository
-git clone https://github.com/Saximn/tiktok-techjam-2025.git
-cd tiktok-techjam-2025
-
-# Create development environment
-python -m venv venv
-venv\Scripts\activate  # Windows
-
-# Install development dependencies
-pip install -r requirements.txt
-
-# Install pre-commit hooks (if available)
-pre-commit install
-```
-
-### Code Style
-
-- **Python**: Black, isort, flake8
-- **Type Hints**: Required for all public APIs
-- **Documentation**: Google-style docstrings
-- **Testing**: pytest with >90% coverage target
 
 ---
 
-## 📞 Support & Community
-
-- **GitHub Issues**: [Report bugs and request features](https://github.com/Saximn/tiktok-techjam-2025/issues)
-- **Discussions**: [Community discussions and Q&A](https://github.com/Saximn/tiktok-techjam-2025/discussions)
-- **Email**: Contact the development team
-
----
-
-## �🙌 Acknowledgements
+## 🙌 Acknowledgements
 
 - YOLO (Ultralytics) for object detection
 - docTR (Mindee) for OCR
