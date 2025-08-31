@@ -288,3 +288,11 @@ MIT (customize as needed).
 - OpenAI Whisper for speech-to-text
 - DeBERTa for token-level PII tagging
 - scikit-learn for lightweight text classifiers
+
+## 📊 Datasets 
+
+We relied on several community datasets and also built our own:
+
+- [@nbroad's PII-DD mistral-generated dataset](https://www.kaggle.com/datasets/nbroad/pii-dd-mistral-generated) — by far the most valuable external dataset. ⭐️
+- [@mpware's Mixtral-generated essays](https://www.kaggle.com/datasets/mpware/pii-mixtral8x7b-generated-essays).
+- A custom dataset of ~2k samples. This was released as external_data_v8.json and includes the nbroad dataset. 🔥
