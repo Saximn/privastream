@@ -19,16 +19,6 @@ A production-leaning, real-time **privacy filter** for livestreams and videos. I
   - Marks **timestamps** for PII words and resolves them to **video frame IDs**
   - Triggers **mouth blur** in sync with the spoken PII segment
 
-- **Scheduler & Throughput control**
-  - Input stream may be **30 FPS**
-  - **Video Scheduler** samples at **4 FPS** (configurable) to reduce compute while preserving privacy
-  - All downstream modules use **frame IDs** to align and act
-
-- **Engineering first**
-  - Typed, simple interfaces: each model is a function `f(frame_id, frame) -> (frame_id, [boxes])`
-  - Deterministic, testable components with clear contracts
-  - CLI & YAML-config friendly
-
 ---
 
 ## 📁 Project Structure
@@ -62,32 +52,107 @@ tiktok-techjam-2025/
 ```
 ---
 
+## System Requirements
+
+### Hardware Requirements
+- **Minimum RAM**: 16GB (32GB+ recommended for audio processing)
+- **GPU**: NVIDIA A100 GPU
+- **Storage**: 10GB+ free space for models and dependencies
+- **CPU**: Multi-core processor (Intel i9/AMD Ryzen 7 or better)
+
+### Software Requirements
+- **Python**: 3.8+ (3.10+ recommended)
+- **Node.js**: 18+ (for web demo)
+- **CUDA**: 12.1+ (for GPU acceleration)
+- **Operating Systems**: Windows 10/11, Ubuntu 20.04+, macOS 12+
+
 ## Quick Start
 
-**1) Install**  
+### 1) Environment Setup
+
+**Python Environment:**
 ```bash
+# Create virtual environment (recommended)
+python -m venv privastream
+source privastream/bin/activate  # Linux/Mac
+# or
+privastream\Scripts\activate     # Windows
+
+# Install Python dependencies
 pip install -r requirements.txt
 ```
 
-**2) Put weights** in `models/`:
-- `models/face_best.pt` (your face detector)
-- `models/best.pt` (your license-plate detector)
-- `models/pii_clf.joblib` (your text PII classifier)
+**For Web Demo (Node.js components):**
+```bash
+# Install frontend dependencies
+cd web-demo-ui/frontend
+npm install
 
-**3) Live run (video only, unified analyzer)**  
+# Install mediasoup server dependencies
+cd ../mediasoup-server
+npm install
+
+# Install backend dependencies
+cd ../backend
+pip install -r requirements.txt
+```
+
+### 2) Model Setup
+
+**Download Pre-trained Models:**
+- Download models from [releases](https://github.com/your-repo/releases) or train your own
+- Place models in the `models/` directory:
+  - `models/face_best.pt` - Face detection model (~50MB)
+  - `models/best.pt` - License plate detection model (~15MB)
+  - `models/pii_clf.joblib` - Text PII classifier (~5MB)
+
+**Audio PII Models** (for audio processing):
+- DeBERTa models are automatically downloaded on first run
+- Or place custom trained models in `audio-processing/models/`
+
+### 3) Basic Usage
+
+**Live video processing:**
 ```bash
 python scripts/run_live.py --mode live --source 0 --show-boxes
 ```
 
-**4) Process a video file**  
+**Process video file:**
 ```bash
 python scripts/run_live.py --mode video --source data/samples/demo.mp4 --out outputs/blurred.mp4 --show-boxes
 ```
 
-**5) Standalone plate blur (YOLO)**  
+**License plate only:**
 ```bash
 python scripts/plate_blur.py --mode live --source 0 --weights models/best.pt --show-boxes
 ```
+
+**Audio PII detection:**
+```bash
+python start_audio_redaction.py --input audio_sample.wav --output processed_audio.wav
+```
+
+### 4) Web Demo
+
+**Start all services:**
+```bash
+# Terminal 1: Start backend API (Flask)
+cd web-demo-ui/backend
+python app.py
+# Runs on http://localhost:5000
+
+# Terminal 2: Start mediasoup server
+cd web-demo-ui/mediasoup-server
+npm run dev
+# Runs on http://localhost:3001
+
+# Terminal 3: Start frontend
+cd web-demo-ui/frontend
+npm run dev
+# Runs on http://localhost:3000
+```
+
+**Access the demo:** Open http://localhost:3000
 
 ### Advanced Usage Examples
 
@@ -153,6 +218,42 @@ Our models achieve **state-of-the-art performance** across all privacy detection
 - **Over-blur on uncertainty** (lower thresholds in “privacy” mode)
 - No frames stored unless explicitly enabled
 - Clear watermark **“Privacy Filter ON”** during blur
+
+---
+
+---
+
+## 🏆 Audio PII Model Training
+
+The solution incorporates **five DeBERTa-v3-large models** with different architectures for enhanced diversity and performance:
+
+**Multi-Sample Dropout Model** (improves training stability):
+```bash
+cd audio-processing
+python train_multidropout.py
+```
+
+**BiLSTM Layer Model** (enhanced feature extraction):
+```bash
+python train_bilstm.py
+```
+
+**Knowledge Distillation** (requires a teacher model):
+```bash
+python train_distil.py
+```
+
+**Experiment 073** (augmented data with name swaps):
+```bash
+python train_exp073.py
+```
+
+**Experiment 076** (random consequential names addition):
+```bash
+python train_exp076.py
+```
+
+**For detailed methodology and inference procedures**, see our [Audio Processing Methodology](https://www.github.com/Saximn/tiktok-techjam-2025/audio-processing.md) and [inference notebook](https://www.github.com/Saximn/tiktok-techjam-2025/main/pii-inference.ipynb).
 
 ---
 
