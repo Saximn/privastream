@@ -253,7 +253,7 @@ python train_exp073.py
 python train_exp076.py
 ```
 
-**For detailed methodology and inference procedures**, see our [Audio Processing Methodology](https://www.github.com/Saximn/tiktok-techjam-2025/audio-processing.md) and [inference notebook](https://www.github.com/Saximn/tiktok-techjam-2025/pii-inference.ipynb).
+**For detailed methodology and inference procedures**, see our [Methodology](https://www.github.com/Saximn/tiktok-techjam-2025/audio-processing.md) and [Inference Notebook](https://www.github.com/Saximn/tiktok-techjam-2025/pii-inference.ipynb).
 
 ---
 
