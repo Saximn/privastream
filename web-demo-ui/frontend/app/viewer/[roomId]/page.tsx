@@ -20,6 +20,7 @@ export default function Viewer() {
   const [recentPIIAlert, setRecentPIIAlert] = useState<string | null>(null)
   const [bufferStatus, setBufferStatus] = useState<any>(null)
   const [performanceStats, setPerformanceStats] = useState<any>(null)
+  const [mounted, setMounted] = useState(false)
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const socketRef = useRef<SocketManager | null>(null)
@@ -64,6 +65,12 @@ export default function Viewer() {
   };
 
   useEffect(() => {
+    setMounted(true)
+  }, [])
+
+  useEffect(() => {
+    if (!mounted) return
+
     const initializeViewer = async () => {
       try {
         setError('')
@@ -323,7 +330,7 @@ export default function Viewer() {
       })
     };
 
-    if (roomId) {
+    if (roomId && mounted) {
       initializeViewer()
     }
 
@@ -370,7 +377,7 @@ export default function Viewer() {
       remoteStreamsRef.current.clear()
       consumersRef.current.clear()
     }
-  }, [roomId])
+  }, [roomId, mounted])
 
   const getConnectionStatusColor = () => {
     switch (connectionState) {
@@ -390,6 +397,31 @@ export default function Viewer() {
       case 'disconnected': return 'Disconnected'
       default: return 'Unknown'
     }
+  }
+
+  // Don't render anything until mounted to avoid hydration issues
+  if (!mounted) {
+    return (
+      <div className="min-h-screen bg-gray-900 p-4">
+        <div className="max-w-6xl mx-auto">
+          <div className="bg-white rounded-lg p-6 mb-6">
+            <h1 className="text-3xl font-bold text-center mb-6 text-gray-800">
+              Loading...
+            </h1>
+          </div>
+          <div className="bg-black rounded-lg overflow-hidden relative">
+            <video
+              autoPlay
+              muted={true}
+              playsInline
+              controls
+              className="w-full h-auto object-contain"
+              style={{ backgroundColor: '#000', minHeight: '400px' }}
+            />
+          </div>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -506,10 +538,11 @@ export default function Viewer() {
         </div>
 
         <div className="bg-black rounded-lg overflow-hidden relative">
+          {/* Always render video element to avoid hydration issues */}
           <video
             ref={videoRef}
             autoPlay
-            muted
+            muted={true}
             playsInline
             controls
             className="w-full h-auto object-contain"

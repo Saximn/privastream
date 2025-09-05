@@ -28,7 +28,7 @@ def handle_connect():
         'room': None
     }
     emit('connected', {'userId': user_id})
-    print(f'🟢 [BACKEND] User {user_id} connected (SID: {request.sid})')
+    print(f'[BACKEND] User {user_id} connected (SID: {request.sid})')
 
 @socketio.on('disconnect')
 def handle_disconnect():
@@ -64,7 +64,7 @@ def handle_create_room():
     users[request.sid]['room'] = room_id
     
     emit('room_created', {'roomId': room_id, 'mediasoupUrl': MEDIASOUP_SERVER_URL})
-    print(f'🟢 [BACKEND] Room {room_id} created with SFU support (Host: {request.sid})')
+    print(f'[BACKEND] Room {room_id} created with SFU support (Host: {request.sid})')
 
 @socketio.on('join_room')
 def handle_join_room(data):

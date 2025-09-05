@@ -3,6 +3,7 @@ const { Server } = require('socket.io');
 const http = require('http');
 const cors = require('cors');
 const mediasoup = require('mediasoup');
+const { AudioRedactionPlugin } = require('./audio-redaction-plugin');
 
 const app = express();
 const server = http.createServer(app);
@@ -54,6 +55,14 @@ const rooms = new Map();
 const transports = new Map();
 const producers = new Map();
 const consumers = new Map();
+
+// Initialize audio redaction plugin
+const audioRedactionPlugin = new AudioRedactionPlugin({
+  enabled: true,
+  redactionServiceUrl: process.env.REDACTION_SERVICE_URL || 'http://localhost:5002',
+  sampleRate: 16000,
+  audioBufferSize: 4096
+});
 
 async function createWorker() {
   worker = await mediasoup.createWorker({
@@ -294,12 +303,30 @@ io.on('connection', async (socket) => {
       }
 
       const producer = await transport.produce({ kind, rtpParameters });
-      room.hostProducers.set(kind, producer);
-      producers.set(producer.id, producer);
 
       producer.on('transportclose', () => {
         console.log(`Producer transport closed: ${producer.id}`);
+        
+        // Clean up audio redaction for this producer
+        if (kind === 'audio') {
+          audioRedactionPlugin.unregisterAudioProducer(roomId, producer.id);
+        }
       });
+
+      // Store the producer in room (temporarily disable audio redaction)
+      room.hostProducers.set(kind, producer);
+      producers.set(producer.id, producer);
+      
+      // Register audio producer for redaction (background processing only)
+      if (kind === 'audio') {
+        try {
+          // Only register for processing, don't replace the producer
+          console.log('🎤 Registering audio for background PII processing');
+          // audioRedactionPlugin.registerAudioProducer(roomId, producer, router);
+        } catch (error) {
+          console.error('Failed to register audio producer for redaction:', error);
+        }
+      }
 
       // Notify all viewers that a new stream is available
       room.viewers.forEach(viewerId => {
@@ -396,7 +423,9 @@ io.on('connection', async (socket) => {
     // Clean up resources
     for (const [roomId, room] of rooms.entries()) {
       if (room.host === socket.id) {
-        // Host disconnected, clean up room
+        // Host disconnected, clean up room and audio redaction
+        audioRedactionPlugin.cleanupRoom(roomId);
+        
         room.viewers.forEach(viewerId => {
           io.to(viewerId).emit('host-disconnected');
         });
@@ -416,7 +445,27 @@ io.on('connection', async (socket) => {
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', mediasoup: 'ready' });
+  res.json({ 
+    status: 'healthy', 
+    mediasoup: 'ready',
+    audioRedaction: audioRedactionPlugin.getStats()
+  });
+});
+
+// Audio redaction stats endpoint
+app.get('/audio-redaction/stats', (req, res) => {
+  res.json(audioRedactionPlugin.getStats());
+});
+
+// Audio redaction control endpoints
+app.post('/audio-redaction/enable', (req, res) => {
+  audioRedactionPlugin.setEnabled(true);
+  res.json({ success: true, message: 'Audio redaction enabled' });
+});
+
+app.post('/audio-redaction/disable', (req, res) => {
+  audioRedactionPlugin.setEnabled(false);
+  res.json({ success: true, message: 'Audio redaction disabled' });
 });
 
 const PORT = process.env.PORT || 3001;

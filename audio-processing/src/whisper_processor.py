@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 import soundfile as sf
 import librosa
 
-from .pipeline_types import (
+from pipeline_types import (
     AudioSegment, 
     TranscriptionResult, 
     StreamConfig
@@ -59,11 +59,28 @@ class WhisperProcessor:
         
         # Load the Whisper model
         self.logger.info(f"Loading Whisper model: {model_name}")
-        self.model = whisper.load_model(
-            model_name, 
-            device=device,
-            download_root=None
-        )
+        try:
+            self.model = whisper.load_model(
+                model_name, 
+                device=device,
+                download_root=None
+            )
+            self.logger.info(f"Successfully loaded Whisper model: {model_name}")
+        except Exception as e:
+            self.logger.error(f"Failed to load Whisper model {model_name}: {e}")
+            # Try to fallback to a smaller model
+            fallback_model = "base"
+            if model_name != fallback_model:
+                self.logger.info(f"Trying fallback model: {fallback_model}")
+                try:
+                    self.model = whisper.load_model(fallback_model, device=device)
+                    self.logger.warning(f"Loaded fallback model: {fallback_model}")
+                    self.model_name = fallback_model
+                except Exception as fallback_e:
+                    self.logger.error(f"Fallback model also failed: {fallback_e}")
+                    raise
+            else:
+                raise
         
         # Thread pool for parallel processing
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
