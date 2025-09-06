@@ -2,6 +2,7 @@
 Unified interface for all blur detection models.
 Demonstrates how to use the refactored face, PII, and plate detection models.
 """
+import os
 import sys
 import time
 from pathlib import Path
@@ -59,7 +60,7 @@ class UnifiedBlurDetector:
             try:
                 face_config = self.config.get("face", {})
                 self.models["face"] = FaceDetector(
-                    embed_path=face_config.get("embed_path", "models/face_blur/whitelist/creator_embedding.json"),
+                    embed_path=face_config.get("embed_path", "video_models/face_blur/whitelist/creator_embedding.json"),
                     gpu_id=face_config.get("gpu_id", 0),
                     det_size=face_config.get("det_size", 960),
                     threshold=face_config.get("threshold", 0.35),
@@ -75,7 +76,7 @@ class UnifiedBlurDetector:
             try:
                 pii_config = self.config.get("pii", {})
                 self.models["pii"] = PIIDetector(
-                    classifier_path=pii_config.get("classifier_path", "models/pii_blur/pii_clf.joblib"),
+                    classifier_path=pii_config.get("classifier_path", os.path.join(os.path.dirname(__file__), "pii_blur/pii_clf.joblib")),
                     conf_thresh=pii_config.get("conf_thresh", 0.35),
                     min_area=pii_config.get("min_area", 80),
                     K_confirm=pii_config.get("K_confirm", 2),
@@ -141,9 +142,12 @@ class UnifiedBlurDetector:
                     "polygons": pii_polygons,
                     "count": len(pii_polygons)
                 }
+                print(f"[UnifiedTester] PII detections: {len(pii_polygons)}")  # Debug print
+
             except Exception as e:
                 print(f"[UnifiedDetector][ERROR] PII detection failed: {e}")
                 results["models"]["pii"] = {"error": str(e)}
+
         
         # Process with plate detector
         if "plate" in self.models:
@@ -227,16 +231,16 @@ def demo_unified_detector():
         "enable_pii": True,
         "enable_plate": True,
         "face": {
-            "embed_path": "models/face_blur/whitelist/creator_embedding.json",
+            "embed_path": "video_models/face_blur/whitelist/creator_embedding.json",
             "threshold": 0.35,
             "dilate_px": 12
         },
         "pii": {
-            "classifier_path": "models/pii_blur/pii_clf.joblib",
+            "classifier_path": "video_models/pii_blur/pii_clf.joblib",
             "conf_thresh": 0.35
         },
         "plate": {
-            "weights_path": "models/plate_blur/best.pt",
+            "weights_path": "video_models/plate_blur/best.pt",
             "conf_thresh": 0.25
         }
     }

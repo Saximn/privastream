@@ -28,19 +28,29 @@ export interface BlurRegions {
   }
 }
 
+// Retroactive buffer size (frames)
+const RETRO_BUFFER_FRAMES = 90; // 3 seconds at 30fps, configurable
+
+interface BufferedFrame {
+  frame: VideoFrame;
+  frameId: number;
+  timestamp: number;
+  blurred: boolean;
+  blurRegions?: BlurRegions;
+}
+
 export class VideoFilter {
-  private config: FilterConfig
-  private canvas: HTMLCanvasElement
-  private ctx: CanvasRenderingContext2D
-  private processingWorker: Worker | null = null
-  private frameCount = 0
-  private lastProcessTime = 0
-  private cachedBlurRegions: BlurRegions | null = null
-  private processingQueue: Set<number> = new Set()
-  private gpuBlur: GPUBlur | null = null
-  private frameBuffer: VideoFrame[] = []
-  private lastBlurTime = 0
-  private skipCounter = 0
+  private config: FilterConfig;
+  private canvas: HTMLCanvasElement;
+  private ctx: CanvasRenderingContext2D;
+  private processingWorker: Worker | null = null;
+  private frameCount = 0;
+  private lastProcessTime = 0;
+  private processingQueue: Set<number> = new Set();
+  private gpuBlur: GPUBlur | null = null;
+  private frameBuffer: BufferedFrame[] = [];
+  private lastBlurTime = 0;
+  private skipCounter = 0;
 
   constructor(config: Partial<FilterConfig> = {}) {
     this.config = {
@@ -87,69 +97,73 @@ export class VideoFilter {
    * Now with optimized processing and frame buffering
    */
   createTransformStream(): TransformStream<VideoFrame, VideoFrame> {
-    const processingInterval = 1000 / this.config.processingFps
-    
+    const processingInterval = 1000 / this.config.processingFps;
     return new TransformStream({
       transform: async (frame: VideoFrame, controller) => {
         try {
-          const now = Date.now()
-          
-          // Add frame to buffer for smoothing
-          this.frameBuffer.push(frame)
-          if (this.frameBuffer.length > this.config.bufferFrames) {
-            const oldFrame = this.frameBuffer.shift()
-            if (oldFrame) oldFrame.close()
-          }
+          const now = Date.now();
+          const frameId = this.frameCount;
 
-          // Skip frame processing for performance (process every N frames)
-          this.skipCounter++
-          const shouldSkipBlur = this.skipCounter % (this.config.skipFrames + 1) !== 0
+          // Buffer the frame with metadata
+          this.frameBuffer.push({
+            frame,
+            frameId,
+            timestamp: frame.timestamp,
+            blurred: false
+          });
+          if (this.frameBuffer.length > RETRO_BUFFER_FRAMES) {
+            const old = this.frameBuffer.shift();
+            if (old && !old.blurred) old.frame.close();
+            console.debug(`[VideoFilter] Buffer full, removing oldest frameId=${old?.frameId}, blurred=${old?.blurred}`);
+          }
 
           // Process frame for detection if it's time
-          const shouldProcess = (now - this.lastProcessTime) >= processingInterval
-          if (shouldProcess && !this.processingQueue.has(this.frameCount)) {
-            this.processFrameForDetection(frame)
-            this.lastProcessTime = now
+          const shouldProcess = (now - this.lastProcessTime) >= processingInterval;
+          if (shouldProcess && !this.processingQueue.has(frameId)) {
+            console.debug(`[VideoFilter] Processing frameId=${frameId} for detection`);
+            this.processFrameForDetection(frame, frameId);
+            this.lastProcessTime = now;
           }
 
-          // Apply blur optimization: skip blur on some frames for performance
-          let filteredFrame: VideoFrame
-          if (shouldSkipBlur && this.cachedBlurRegions && 
-              (this.cachedBlurRegions.rectangles.length === 0 && this.cachedBlurRegions.polygons.length === 0)) {
-            // No blur needed and skipping frame - pass through directly
-            filteredFrame = frame
+          // Output only frames that have been blurred (retroactive)
+          let outputFrame: VideoFrame | null = null;
+          if (this.frameBuffer.length > 0 && this.frameBuffer[0].blurred) {
+            outputFrame = this.frameBuffer[0].frame;
+            console.debug(`[VideoFilter] Outputting blurred frameId=${this.frameBuffer[0].frameId}`);
+            this.frameBuffer.shift();
           } else {
-            // Apply blur to current frame using cached regions
-            filteredFrame = await this.applyBlurToFrameOptimized(frame)
-            this.lastBlurTime = now
+            if (this.frameBuffer.length > 0) {
+              console.debug(`[VideoFilter] Waiting for blur: frameId=${this.frameBuffer[0].frameId}, blurred=${this.frameBuffer[0].blurred}`);
+            }
           }
-          
-          controller.enqueue(filteredFrame)
-          this.frameCount++
+
+          if (outputFrame) {
+            controller.enqueue(outputFrame);
+          }
+          this.frameCount++;
         } catch (error) {
-          console.error('[VideoFilter] Transform error:', error)
-          controller.enqueue(frame) // Pass through on error
+          console.error('[VideoFilter] Transform error:', error);
+          controller.enqueue(frame); // Pass through on error
         }
       }
-    })
+    });
   }
 
   /**
    * Process frame for detection (async, doesn't block stream)
    */
-  private async processFrameForDetection(frame: VideoFrame) {
-    const frameId = this.frameCount
-    this.processingQueue.add(frameId)
-
+  private async processFrameForDetection(frame: VideoFrame, frameId: number) {
+    this.processingQueue.add(frameId);
     try {
       // Convert VideoFrame to canvas
-      this.canvas.width = frame.displayWidth
-      this.canvas.height = frame.displayHeight
-      this.ctx.drawImage(frame, 0, 0)
-      
+      this.canvas.width = frame.displayWidth;
+      this.canvas.height = frame.displayHeight;
+      this.ctx.drawImage(frame, 0, 0);
+
       // Convert to base64
-      const dataUrl = this.canvas.toDataURL('image/jpeg', 0.8)
-      
+      const dataUrl = this.canvas.toDataURL('image/jpeg', 0.8);
+      console.debug(`[VideoFilter] Sending frameId=${frameId} to API`);
+
       // Send to API
       const response = await fetch(`${this.config.apiUrl}/filter-frame`, {
         method: 'POST',
@@ -158,65 +172,73 @@ export class VideoFilter {
           frame: dataUrl,
           frame_id: frameId
         })
-      })
-      
+      });
+
       if (response.ok) {
-        const result: BlurRegions = await response.json()
-        this.cachedBlurRegions = result
+        const result: BlurRegions = await response.json();
+        console.debug(`[VideoFilter] Received blur regions for frameId=${result.frame_id}`);
+        // Find the matching frame in buffer and apply blur
+        const bufIdx = this.frameBuffer.findIndex(f => f.frameId === result.frame_id);
+        if (bufIdx !== -1) {
+          const bufFrame = this.frameBuffer[bufIdx];
+          if (!bufFrame.blurred) {
+            bufFrame.frame = await this.applyBlurToFrameOptimized(bufFrame.frame, result);
+            bufFrame.blurred = true;
+            bufFrame.blurRegions = result;
+            console.debug(`[VideoFilter] Applied blur to frameId=${result.frame_id}`);
+          }
+        } else {
+          console.warn(`[VideoFilter] No matching buffered frame for frameId=${result.frame_id}`);
+        }
       } else {
-        console.warn('[VideoFilter] API request failed:', response.status)
+        console.warn('[VideoFilter] API request failed:', response.status);
       }
     } catch (error) {
-      console.error('[VideoFilter] Detection processing error:', error)
+      console.error('[VideoFilter] Detection processing error:', error);
     } finally {
-      this.processingQueue.delete(frameId)
+      this.processingQueue.delete(frameId);
     }
   }
 
   /**
    * Apply blur to frame using cached regions with GPU acceleration
    */
-  private async applyBlurToFrameOptimized(frame: VideoFrame): Promise<VideoFrame> {
-    if (!this.cachedBlurRegions || 
-        (this.cachedBlurRegions.rectangles.length === 0 && this.cachedBlurRegions.polygons.length === 0)) {
-      return frame // No blur needed
+  private async applyBlurToFrameOptimized(frame: VideoFrame, blurRegions: BlurRegions): Promise<VideoFrame> {
+    if (!blurRegions || (blurRegions.rectangles.length === 0 && blurRegions.polygons.length === 0)) {
+      return frame; // No blur needed
     }
 
     // Set canvas size
-    this.canvas.width = frame.displayWidth
-    this.canvas.height = frame.displayHeight
-    
+    this.canvas.width = frame.displayWidth;
+    this.canvas.height = frame.displayHeight;
+
     // Draw original frame
-    this.ctx.drawImage(frame, 0, 0)
-    
+    this.ctx.drawImage(frame, 0, 0);
+
     // Apply blur regions with GPU acceleration if available
     if (this.gpuBlur) {
       try {
-        const blurredCanvas = this.gpuBlur.applyBlurToCanvas(this.canvas, this.cachedBlurRegions)
-        
+        const blurredCanvas = this.gpuBlur.applyBlurToCanvas(this.canvas, blurRegions);
         // Create new VideoFrame from GPU-processed canvas
         const videoFrame = new VideoFrame(blurredCanvas, {
           timestamp: frame.timestamp
-        })
-        
-        frame.close() // Clean up original frame
-        return videoFrame
+        });
+        frame.close(); // Clean up original frame
+        return videoFrame;
       } catch (error) {
-        console.warn('[VideoFilter] GPU blur failed, falling back to CPU:', error)
+        console.warn('[VideoFilter] GPU blur failed, falling back to CPU:', error);
         // Fall through to CPU blur
       }
     }
-    
+
     // Fallback to CPU blur
-    this.applyBlurRegions(this.cachedBlurRegions)
-    
+    this.applyBlurRegions(blurRegions);
     // Create new VideoFrame from canvas
     const videoFrame = new VideoFrame(this.canvas, {
       timestamp: frame.timestamp
-    })
-    
-    frame.close() // Clean up original frame
-    return videoFrame
+    });
+    frame.close(); // Clean up original frame
+    return videoFrame;
   }
 
   /**
