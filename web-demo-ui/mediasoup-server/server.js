@@ -420,7 +420,7 @@ io.on('connection', socket => {
             let processedFrame = frameData.frame; // Default to original frame
             
             // Process every 15th frame for detection
-            if (state.frameCount % 15 === 1) {
+            if (true) {
               console.log(`[SERVER] Processing frame ${state.frameCount} for detection`);
               try {
                 // Get detection data from Python service

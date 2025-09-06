@@ -90,7 +90,7 @@ def filter_frame(frame, frame_id=0, blur_only=False, provided_rectangles=None):
                 if x >= 0 and y >= 0 and x + w <= frame.shape[1] and y + h <= frame.shape[0] and w > 0 and h > 0:
                     roi = frame[y:y+h, x:x+w]
                     if roi.size > 0:
-                        frame[y:y+h, x:x+w] = cv2.GaussianBlur(roi, (35, 35), 0)
+                        frame[y:y+h, x:x+w] = cv2.GaussianBlur(roi, (0, 0), sigmaX=75, sigmaY=75)
                         blur_applied += 1
         except Exception as e:
             print(f"[API] Error blurring rectangle {rect}: {e}")
