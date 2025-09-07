@@ -20,7 +20,7 @@ CORS(app, origins="*")
 
 # Detector configuration
 DETECTOR_CONFIG = {
-    "enable_face": True,
+    "enable_face": False,
     "enable_pii": False,
     "enable_plate": False,
     "pii": {

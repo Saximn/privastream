@@ -73,6 +73,9 @@ const frameProcessingState = new Map(); // roomId -> { frameCount, lastDetection
 // Frame buffer for video filters
 const frameBuffer = new Map(); // roomId -> [{frame, timestamp}]
 
+// Audio chunk timing tracking for sync
+const audioChunkStartTimes = new Map(); // roomId -> [startTime1, startTime2, ...]
+
 // Initialize Mediasoup
 async function createWorker() {
   worker = await mediasoup.createWorker({ rtcMinPort: 10000, rtcMaxPort: 10100 });
@@ -336,6 +339,9 @@ io.on('connection', socket => {
     rooms.set(roomId, room);
     socket.join(roomId);
     
+    // Initialize audio chunk timing tracking
+    audioChunkStartTimes.set(roomId, []);
+    
     // Set up audio processing for this room (since audio is handled via socket events, not WebRTC producers)
     console.log('[AUDIO-SERVER] 🎤 Setting up audio redaction for room:', roomId);
     
@@ -347,10 +353,19 @@ io.on('connection', socket => {
         
         console.log(`[AUDIO-SERVER] 🎤 Received audio data for room ${roomId}:`, audioBuffer.length, 'bytes');
         
+        // Track audio chunk start time (when first data for new chunk arrives)
+        const chunkStartTimes = audioChunkStartTimes.get(roomId) || [];
+        const currentTime = Date.now();
+        
         // Process audio through redaction service
         const result = await audioRedactionProcessor.addAudioChunk(roomId, audioBuffer);
         
         if (result && result.success) {
+          // A 3-second chunk just completed - record when it started and calculate delay
+          const chunkStartTime = currentTime - 3000; // Estimate: chunk started 3 seconds ago
+          chunkStartTimes.push(chunkStartTime);
+          audioChunkStartTimes.set(roomId, chunkStartTimes);
+          
           console.log('[AUDIO-SERVER] ✅ Audio processed successfully, sending to viewers');
           console.log('[AUDIO-SERVER] 🎤 Processed audio metadata:', {
             piiCount: result.metadata?.pii_count || 0,
@@ -358,17 +373,23 @@ io.on('connection', socket => {
             transcript: result.metadata?.transcript ? result.metadata.transcript.substring(0, 50) + '...' : 'empty'
           });
           
-          // Send processed audio to viewers
-          const room = rooms.get(roomId);
-          if (room) {
-            room.viewers.forEach(viewerId => {
-              io.to(viewerId).emit('processed-audio', {
-                audioData: Array.from(new Int16Array(result.processedAudio.buffer)),
-                metadata: result.metadata,
-                timestamp: Date.now()
+          // Calculate delay based on estimated chunk start time to achieve 8 seconds total
+          const targetOutputTime = chunkStartTime + 8000; // 8 seconds from when chunk started
+          const delayNeeded = Math.max(0, targetOutputTime - Date.now());
+          
+          setTimeout(() => {
+            const room = rooms.get(roomId);
+            if (room) {
+              room.viewers.forEach(viewerId => {
+                io.to(viewerId).emit('processed-audio', {
+                  audioData: Array.from(new Int16Array(result.processedAudio.buffer)),
+                  metadata: result.metadata,
+                  timestamp: Date.now()
+                });
               });
-            });
-          }
+              console.log('[AUDIO-SERVER] 📤 Sent audio with', delayNeeded, 'ms delay (8s total from chunk start) to', room.viewers.size, 'viewers');
+            }
+          }, delayNeeded); // Dynamic delay to achieve 8 seconds total from chunk start
         } else {
           console.log('[AUDIO-SERVER] ⚠️ Audio processing failed or not ready yet');
         }
@@ -541,7 +562,12 @@ io.on('connection', socket => {
                   frame: result.frame ? 'received' : 'missing'
                 });
                 
-                // Add processed frame to buffer with 3.5s delay
+                // Calculate delay based on capture time to achieve 8 seconds total from capture
+                const captureTime = timestamp || Date.now();
+                const targetOutputTime = captureTime + 8000; // 8 seconds from when media was captured
+                const currentTime = Date.now();
+                const delayNeeded = Math.max(0, targetOutputTime - currentTime);
+                
                 setTimeout(() => {
                   const room = rooms.get(roomId);
                   if (room && room.viewers.size > 0) {
@@ -554,13 +580,18 @@ io.on('connection', socket => {
                         timestamp: timestamp
                       });
                     });
-                    console.log('[VIDEO-SERVER] 📤 Sent delayed processed frame to', room.viewers.size, 'viewers');
+                    console.log('[VIDEO-SERVER] 📤 Sent video frame with', delayNeeded, 'ms delay (8s total from capture) to', room.viewers.size, 'viewers');
                   }
-                }, 3500); // 3.5 second delay to sync with 3s audio processing
+                }, delayNeeded); // Dynamic delay to achieve 8 seconds total from capture
               } else {
                 console.log('[VIDEO-SERVER] ❌ Python service error:', response.status);
                 
-                // Send original frame to viewers as fallback with same delay
+                // Calculate delay for fallback frame based on capture time
+                const captureTime = timestamp || Date.now();
+                const targetOutputTime = captureTime + 8000; // 8 seconds from when media was captured
+                const currentTime = Date.now();
+                const delayNeeded = Math.max(0, targetOutputTime - currentTime);
+                
                 setTimeout(() => {
                   const room = rooms.get(roomId);
                   if (room && room.viewers.size > 0) {
@@ -573,9 +604,9 @@ io.on('connection', socket => {
                         timestamp: timestamp
                       });
                     });
-                    console.log('[VIDEO-SERVER] 📤 Sent delayed fallback frame to', room.viewers.size, 'viewers');
+                    console.log('[VIDEO-SERVER] 📤 Sent fallback frame with', delayNeeded, 'ms delay (8s total from capture) to', room.viewers.size, 'viewers');
                   }
-                }, 3500); // Same 3.5 second delay
+                }, delayNeeded); // Dynamic delay to achieve 8 seconds total from capture
               }
               
             } catch (error) {
@@ -762,6 +793,9 @@ io.on('connection', socket => {
         } catch (error) {
           console.error('[SERVER] Error cleaning up audio redaction:', error);
         }
+        
+        // Clean up audio timing tracking
+        audioChunkStartTimes.delete(roomId);
         
         rooms.delete(roomId);
       } else if (room.viewers.has(socket.id)) {
