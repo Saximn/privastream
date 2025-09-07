@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(npm run dev:*)",
+      "Bash(pip install:*)",
+      "Bash(npm install:*)",
+      "Bash(envScriptsactivate)",
+      "Bash(./env/Scripts/activate.bat)",
+      "Bash(node:*)",
+      "Bash(timeout:*)",
+      "Bash(cat:*)",
+      "Bash(curl:*)",
+      "Bash(ffmpeg:*)",
+      "Bash(where:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

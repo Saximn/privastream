@@ -345,13 +345,29 @@ io.on('connection', socket => {
     room.viewers.add(socket.id);
     socket.join(data.roomId);
     
+    // Check if host is already streaming (has video producer)
+    const isHostStreaming = room.hostProducers.has('video');
+    console.log('[SERVER] Viewer joined room:', data.roomId, 'Host streaming:', isHostStreaming);
+    
+    // If host is already streaming, immediately notify the viewer
+    if (isHostStreaming) {
+      console.log('[SERVER] 📡 Notifying new viewer that host is already streaming');
+      // Use setTimeout to ensure the viewer has completed initialization
+      setTimeout(() => {
+        socket.emit('host-streaming-started', {
+          roomId: data.roomId,
+          timestamp: Date.now()
+        });
+      }, 100);
+    }
+    
     // Notify viewer of existing producers
     const existingProducers = Array.from(room.hostProducers.entries()).map(([kind, producer]) => ({
       id: producer.id,
       kind: kind
     }));
     
-    callback({ success:true, producers: existingProducers });
+    callback({ success:true, producers: existingProducers, hostStreaming: isHostStreaming });
   });
 
   // Get router RTP capabilities
@@ -416,7 +432,7 @@ io.on('connection', socket => {
       
       // Audio redaction processing setup
       if (kind === 'audio') {
-        console.log('[SERVER] Setting up audio redaction for producer:', producer.id);
+        // console.log('[SERVER] Setting up audio redaction for producer:', producer.id);
         try {
           // Setup audio processing pipeline
           const processedProducer = await audioRedactionProcessor.setupAudioProcessing(roomId, producer, router);
@@ -432,13 +448,13 @@ io.on('connection', socket => {
               const int16Array = new Int16Array(audioData);
               const audioBuffer = Buffer.from(int16Array.buffer);
               
-              console.log(`[SERVER] Received audio data for room ${roomId}:`, audioBuffer.length, 'bytes');
+              // console.log(`[SERVER] Received audio data for room ${roomId}:`, audioBuffer.length, 'bytes');
               
               // Process audio through redaction service
               const result = await audioRedactionProcessor.addAudioChunk(roomId, audioBuffer);
               
               if (result && result.success) {
-                console.log('[SERVER] Audio processed successfully, sending to viewers');
+                // console.log('[SERVER] Audio processed successfully, sending to viewers');
                 
                 // Send processed audio to viewers
                 room.viewers.forEach(viewerId => {
@@ -485,8 +501,8 @@ io.on('connection', socket => {
           // Set up real video frame processing handler
           socket.on('video-frame', async (data) => {
             try {
-              const { roomId, frame, frameId, timestamp } = data;
-              console.log('[VIDEO-SERVER] 📸 Received real video frame for room:', roomId, 'frameId:', frameId, 'frame size:', frame?.length);
+              const { roomId, frameData, timestamp } = data;
+              console.log('[VIDEO-SERVER] 📸 Received real video frame for room:', roomId, 'size:', frameData.length);
               
               // Notify viewers on first frame that host is streaming
               if (!hasNotifiedViewers) {
@@ -503,39 +519,23 @@ io.on('connection', socket => {
                 hasNotifiedViewers = true;
               }
               
-              // Get or initialize frame count
-              if (!frameProcessingState.has(roomId)) {
-                frameProcessingState.set(roomId, { frameCount: 0 });
-              }
-              const state = frameProcessingState.get(roomId);
-              state.frameCount++;
-              
-              // Process frame through WebRTC video processor
-              if (!frame) {
-                console.error('[VIDEO-SERVER] ❌ No frame data found');
-                return;
-              }
-              
-              console.log(`[VIDEO-SERVER] 🎯 Processing frame ${state.frameCount} for room ${roomId} (every 15th: ${state.frameCount % 15 === 1})`);
-              
-              // Process frame through Python detection service (DIRECT CALL - like working version)
-              console.log('[VIDEO-SERVER] 📡 Calling Python detection service directly...');
+              // Process frame through Python detection service
               const response = await fetch('http://localhost:5001/process-frame', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
-                  frame: frame, // Host already sends full data:image/jpeg;base64, URL
+                  frame: frameData, 
                   detect_only: true,
-                  frame_id: state.frameCount
+                  frame_id: Date.now()
                 }),
                 timeout: 5000
               });
               
               if (response.ok) {
                 const result = await response.json();
-                console.log('[VIDEO-SERVER] ✅ Python service responded successfully:', {
+                console.log('[VIDEO-SERVER] ✅ Frame processed successfully:', {
                   rectangles: result.rectangles?.length || 0,
-                  frame: result.frame ? 'received' : 'missing'
+                  success: result.success
                 });
                 
                 // Send processed frame to viewers
@@ -543,31 +543,16 @@ io.on('connection', socket => {
                 if (room && room.viewers.size > 0) {
                   room.viewers.forEach(viewerId => {
                     io.to(viewerId).emit('processed-video-frame', {
-                      frame: result.frame,
-                      frameId: frameId,
-                      boundingBoxCount: result.rectangles?.length || 0,
-                      wasDetectionFrame: true,
-                      timestamp: timestamp
+                      frameData: result.frame,
+                      boundingBoxes: result.rectangles || [],
+                      timestamp: timestamp,
+                      processingMode: result.processing_mode
                     });
                   });
                   console.log('[VIDEO-SERVER] 📤 Sent processed frame to', room.viewers.size, 'viewers');
                 }
               } else {
-                console.log('[VIDEO-SERVER] ❌ Python service error:', response.status);
-                
-                // Send original frame to viewers as fallback
-                const room = rooms.get(roomId);
-                if (room && room.viewers.size > 0) {
-                  room.viewers.forEach(viewerId => {
-                    io.to(viewerId).emit('processed-video-frame', {
-                      frame: frame, // Already has data:image/jpeg;base64, prefix
-                      frameId: frameId,
-                      boundingBoxCount: 0,
-                      wasDetectionFrame: false,
-                      timestamp: timestamp
-                    });
-                  });
-                }
+                console.error('[VIDEO-SERVER] ❌ Python service error:', response.status);
               }
               
             } catch (error) {
@@ -599,12 +584,15 @@ io.on('connection', socket => {
 
       callback({ id: producer.id });
       
-      console.log('[SERVER] Producer created and configured:', {
-        producerId: producer.id,
-        kind: kind,
-        roomId: roomId,
-        hasProcessing: kind === 'video'
-      });
+      if (kind === 'video') {
+        console.log('[VIDEO-SERVER] 🎉 Video producer fully configured:', {
+          producerId: producer.id,
+          roomId: roomId,
+          hasVideo: room.hostProducers.has('video'),
+          totalProducers: room.hostProducers.size,
+          frameProcessingReady: true
+        });
+      }
     } catch (err) {
       callback({ error: err.message });
     }
@@ -657,30 +645,26 @@ io.on('connection', socket => {
     const room = rooms.get(data.roomId);
     if (!room) return callback({ error: 'Room not found' });
     
+    const producers = [];
+    
+    // Add audio producer (skip original, we don't use it)
+    // Audio is handled via processed audio events
+    
+    // Add video producer if available
     console.log('[VIDEO-SERVER] 🔍 getProducers called for room:', data.roomId);
     console.log('[VIDEO-SERVER] Available producers in room:', Array.from(room.hostProducers.keys()));
     
-    // For processed video architecture, viewers should NOT consume any video producers
-    // Video is handled via processed-video-frame socket events
-    // Audio is handled via processed-audio socket events
-    const producers = Array.from(room.hostProducers.entries()).map(([kind, producer]) => {
-      // Skip video producers - video handled via socket events
-      if (kind === 'video') {
-        console.log('[VIDEO-SERVER] ❌ Skipping video producer - using processed frames via socket events');
-        return null;
-      }
-      
-      // Skip audio producers - audio handled via socket events  
-      if (kind === 'audio') {
-        console.log('[VIDEO-SERVER] ❌ Skipping audio producer - using processed audio via socket events');
-        return null;
-      }
-      
-      // Skip processed producers
-      if (kind.startsWith('processed-')) return null;
-      
-      return { id: producer.id, kind: kind };
-    }).filter(Boolean);
+    if (room.hostProducers.has('video')) {
+      const videoProducer = room.hostProducers.get('video');
+      console.log('[VIDEO-SERVER] ✅ Found video producer:', {
+        id: videoProducer.id,
+        kind: videoProducer.kind,
+        closed: videoProducer.closed
+      });
+      producers.push({ id: videoProducer.id, kind: 'video' });
+    } else {
+      console.log('[VIDEO-SERVER] ❌ No video producers found in room');
+    }
     
     console.log('[VIDEO-SERVER] 📤 Returning producers to viewer:', producers);
     
@@ -753,6 +737,13 @@ io.on('connection', socket => {
           audioRedactionProcessor.cleanup(roomId);
         } catch (error) {
           console.error('[SERVER] Error cleaning up audio redaction:', error);
+        }
+        
+        // Clean up video processing for this room
+        try {
+          videoProcessor.cleanup(roomId);
+        } catch (error) {
+          console.error('[SERVER] Error cleaning up video processing:', error);
         }
         
         rooms.delete(roomId);

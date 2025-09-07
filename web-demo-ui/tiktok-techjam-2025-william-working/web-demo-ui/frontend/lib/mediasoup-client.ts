@@ -120,9 +120,9 @@ export class MediasoupClient {
         readyState: audioTrack.readyState,
         settings: audioTrack.getSettings()
       })
-      // DO NOT produce audio track to Mediasoup - audio is handled separately via socket events
-      console.log('[MediasoupClient] 🎤 AUDIO TRACK AVAILABLE - WILL BE PROCESSED SEPARATELY VIA SOCKET EVENTS')
-      console.log('[MediasoupClient] ⚠️ NOT producing audio track to Mediasoup to prevent feedback')
+      const audioProducer = await this.producerTransport.produce({ track: audioTrack })
+      console.log('[MediasoupClient] Audio track produced:', audioProducer.id)
+      console.log('[MediasoupClient] 🎤 MICROPHONE AUDIO IS NOW BEING SENT TO MEDIASOUP SERVER')
     } else {
       console.error('[MediasoupClient] ❌ NO AUDIO TRACK FOUND IN STREAM - MICROPHONE ACCESS FAILED')
     }

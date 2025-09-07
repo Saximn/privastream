@@ -1,0 +1,21 @@
+{
+  "run_name": "rules_only",
+  "timestamp": 1756582577.9808397,
+  "total_images": 500,
+  "images_evaluated": 164,
+  "images_skipped": 336,
+  "region_precision": 0.5,
+  "region_recall": 0.49777777777777776,
+  "region_f1": 0.49888641425389757,
+  "pixel_coverage_avg": 0.6076286873477204,
+  "residual_ocr_rate": null,
+  "processing_time_sec": 25.151224613189697,
+  "parameters": {
+    "classifier_used": false,
+    "thr_bias": 0.0,
+    "conf_gate": 0.35,
+    "iou_thr": 0.5,
+    "min_area": 80,
+    "residual_ocr_enabled": false
+  }
+}
