@@ -138,13 +138,18 @@ export default function Viewer() {
         setupProcessedFrameHandlers()
         setupAudioHandlers()
 
-        // Request existing producers
+        // Request existing producers (but skip audio producers since we use processed audio)
         console.log('[VIEWER] Requesting existing producers...')
         sfuSocketRef.current!.emit('getProducers', { roomId }, (response: any) => {
           console.log('[VIEWER] Existing producers:', response)
           if (response.producers) {
             response.producers.forEach((producer: any) => {
-              consumeProducer(producer.id, producer.kind)
+              // Only consume video producers, skip audio (we use processed audio instead)
+              if (producer.kind === 'video') {
+                consumeProducer(producer.id, producer.kind)
+              } else {
+                console.log('[VIEWER] Skipping audio producer - using processed audio instead')
+              }
             })
           }
         })
@@ -162,10 +167,15 @@ export default function Viewer() {
     const setupEventHandlers = () => {
       if (!sfuSocketRef.current) return
 
-      // Handle new producers
+      // Handle new producers (but skip audio producers since we use processed audio)
       sfuSocketRef.current.on('new-producer', (data: any) => {
         console.log('[VIEWER] New producer:', data)
-        consumeProducer(data.producerId, data.kind)
+        // Only consume video producers, skip audio (we use processed audio instead)
+        if (data.kind === 'video') {
+          consumeProducer(data.producerId, data.kind)
+        } else {
+          console.log('[VIEWER] Skipping new audio producer - using processed audio instead')
+        }
       })
 
       // Handle producer closed

@@ -51,36 +51,7 @@ class VoskBertRedactionService:
         
         logger.info("Vosk + BERT Audio Redaction Service initialized")
     
-    def save_audio_debug(self, audio_data, sample_rate, prefix="debug"):
-        """Save audio data as WAV file for debugging"""
-        try:
-            # Create debug directory if it doesn't exist
-            debug_dir = "debug_audio"
-            os.makedirs(debug_dir, exist_ok=True)
-            
-            # Generate filename with timestamp
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-            filename = f"{debug_dir}/{prefix}_{timestamp}.wav"
-            
-            # Convert float audio to int16
-            if audio_data.dtype == np.float32:
-                audio_int16 = (audio_data * 32767).astype(np.int16)
-            else:
-                audio_int16 = audio_data.astype(np.int16)
-            
-            # Save as WAV file
-            with wave.open(filename, 'wb') as wav_file:
-                wav_file.setnchannels(1)  # Mono
-                wav_file.setsampwidth(2)  # 16-bit
-                wav_file.setframerate(sample_rate)
-                wav_file.writeframes(audio_int16.tobytes())
-            
-            logger.info(f"🔊 DEBUG: Saved audio to {filename} ({len(audio_data)} samples)")
-            return filename
-            
-        except Exception as e:
-            logger.error(f"Failed to save debug audio: {e}")
-            return None
+    # Removed save_audio_debug function to improve performance
     
     def load_models(self):
         """Load Vosk ASR and BERT NER models"""
@@ -178,6 +149,7 @@ class VoskBertRedactionService:
     def detect_sensitive_spans_bert(self, transcript, word_times):
         """Detect PII using BERT NER + keywords"""
         redact_intervals = []
+        logger.info("Detecting sensitive spans with BERT NER + keywords...")
         
         if not transcript or not word_times:
             return redact_intervals
@@ -306,8 +278,7 @@ class VoskBertRedactionService:
             total_start = time.time()
             logger.info(f"Processing {len(audio_data)} samples at {sample_rate}Hz with Vosk + BERT")
             
-            # DEBUG: Save incoming audio as WAV file
-            self.save_audio_debug(audio_data, sample_rate, "incoming")
+            # Audio processing without debug files for better performance
             
             # Step 1: Fast transcription with Vosk
             vosk_start = time.time()
@@ -324,11 +295,7 @@ class VoskBertRedactionService:
             redacted_audio = self.mute_intervals(audio_data, sample_rate, intervals)
             mute_time = time.time() - mute_start
             
-            # DEBUG: Save redacted audio as WAV file
-            if len(intervals) > 0:
-                self.save_audio_debug(redacted_audio, sample_rate, "redacted")
-            else:
-                self.save_audio_debug(redacted_audio, sample_rate, "clean")
+            # Audio processing complete (debug files removed for performance)
             
             total_time = time.time() - total_start
             audio_duration = len(audio_data) / sample_rate
