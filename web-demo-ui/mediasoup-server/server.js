@@ -541,36 +541,41 @@ io.on('connection', socket => {
                   frame: result.frame ? 'received' : 'missing'
                 });
                 
-                // Send processed frame to viewers
-                const room = rooms.get(roomId);
-                if (room && room.viewers.size > 0) {
-                  room.viewers.forEach(viewerId => {
-                    io.to(viewerId).emit('processed-video-frame', {
-                      frame: result.frame,
-                      frameId: frameId,
-                      boundingBoxCount: result.rectangles?.length || 0,
-                      wasDetectionFrame: true,
-                      timestamp: timestamp
+                // Add processed frame to buffer with 3.5s delay
+                setTimeout(() => {
+                  const room = rooms.get(roomId);
+                  if (room && room.viewers.size > 0) {
+                    room.viewers.forEach(viewerId => {
+                      io.to(viewerId).emit('processed-video-frame', {
+                        frame: result.frame,
+                        frameId: frameId,
+                        boundingBoxCount: result.rectangles?.length || 0,
+                        wasDetectionFrame: true,
+                        timestamp: timestamp
+                      });
                     });
-                  });
-                  console.log('[VIDEO-SERVER] 📤 Sent processed frame to', room.viewers.size, 'viewers');
-                }
+                    console.log('[VIDEO-SERVER] 📤 Sent delayed processed frame to', room.viewers.size, 'viewers');
+                  }
+                }, 3500); // 3.5 second delay to sync with 3s audio processing
               } else {
                 console.log('[VIDEO-SERVER] ❌ Python service error:', response.status);
                 
-                // Send original frame to viewers as fallback
-                const room = rooms.get(roomId);
-                if (room && room.viewers.size > 0) {
-                  room.viewers.forEach(viewerId => {
-                    io.to(viewerId).emit('processed-video-frame', {
-                      frame: frame, // Already has data:image/jpeg;base64, prefix
-                      frameId: frameId,
-                      boundingBoxCount: 0,
-                      wasDetectionFrame: false,
-                      timestamp: timestamp
+                // Send original frame to viewers as fallback with same delay
+                setTimeout(() => {
+                  const room = rooms.get(roomId);
+                  if (room && room.viewers.size > 0) {
+                    room.viewers.forEach(viewerId => {
+                      io.to(viewerId).emit('processed-video-frame', {
+                        frame: frame, // Already has data:image/jpeg;base64, prefix
+                        frameId: frameId,
+                        boundingBoxCount: 0,
+                        wasDetectionFrame: false,
+                        timestamp: timestamp
+                      });
                     });
-                  });
-                }
+                    console.log('[VIDEO-SERVER] 📤 Sent delayed fallback frame to', room.viewers.size, 'viewers');
+                  }
+                }, 3500); // Same 3.5 second delay
               }
               
             } catch (error) {
