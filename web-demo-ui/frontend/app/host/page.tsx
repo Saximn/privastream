@@ -23,6 +23,8 @@ export default function Host() {
   const mediasoupClientRef = useRef<MediasoupClient | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const frameIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const audioProcessorRef = useRef<ScriptProcessorNode | null>(null)
 
   useEffect(() => {
     const initializeConnections = async () => {
@@ -95,6 +97,12 @@ try {
       if (frameIntervalRef.current) {
         clearInterval(frameIntervalRef.current)
       }
+      if (audioProcessorRef.current) {
+        audioProcessorRef.current.disconnect()
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close()
+      }
       localStreamRef.current?.getTracks().forEach(track => track.stop())
       mediasoupClientRef.current?.stopProducing()
       socketRef.current?.disconnect()
@@ -108,7 +116,36 @@ try {
       setConnectionState('initializing')
       if (!mediasoupClientRef.current || !socketRef.current) throw new Error('Connections not initialized')
 
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, frameRate: 30 }, audio: true })
+      console.log('[HOST] Requesting microphone and camera access...')
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { width: 1280, height: 720, frameRate: 30 }, 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        } 
+      })
+      
+      console.log('[HOST] 🎤 Media access granted! Stream details:', {
+        id: stream.id,
+        active: stream.active,
+        videoTracks: stream.getVideoTracks().length,
+        audioTracks: stream.getAudioTracks().length
+      })
+      
+      // Verify audio track
+      const audioTrack = stream.getAudioTracks()[0]
+      if (audioTrack) {
+        console.log('[HOST] ✅ Audio track acquired:', {
+          id: audioTrack.id,
+          enabled: audioTrack.enabled,
+          muted: audioTrack.muted,
+          readyState: audioTrack.readyState
+        })
+      } else {
+        console.error('[HOST] ❌ No audio track in stream!')
+      }
+      
       localStreamRef.current = stream
       if (videoRef.current) videoRef.current.srcObject = stream
 
@@ -121,6 +158,9 @@ try {
       if (isVideoFilterEnabled) {
         startFrameProcessing(stream)
       }
+      
+      // Start audio processing for redaction
+      startAudioProcessing(stream)
 
       socketRef.current.getSocket().emit('sfu_streaming_started', { roomId })
       setIsStreaming(true)
@@ -139,6 +179,17 @@ try {
       if (frameIntervalRef.current) {
         clearInterval(frameIntervalRef.current)
         frameIntervalRef.current = null
+      }
+      
+      // Stop audio processing
+      if (audioProcessorRef.current) {
+        audioProcessorRef.current.disconnect()
+        audioProcessorRef.current = null
+      }
+      
+      if (audioContextRef.current) {
+        await audioContextRef.current.close()
+        audioContextRef.current = null
       }
       
       await mediasoupClientRef.current?.stopProducing()
@@ -206,6 +257,88 @@ try {
     }, 250) // 4 FPS
     
     console.log('[DEBUG] Frame processing started')
+  }
+
+  const startAudioProcessing = (stream: MediaStream) => {
+    console.log('[DEBUG] Starting audio processing for redaction')
+    
+    const audioTrack = stream.getAudioTracks()[0]
+    if (!audioTrack) {
+      console.error('[DEBUG] No audio track available for processing')
+      return
+    }
+    
+    try {
+      // Create audio context
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)()
+      const audioContext = audioContextRef.current
+      
+      console.log('[DEBUG] Audio context created:', {
+        sampleRate: audioContext.sampleRate,
+        state: audioContext.state
+      })
+      
+      // Create media stream source
+      const source = audioContext.createMediaStreamSource(stream)
+      
+      // Create script processor node (deprecated but still works)
+      const bufferSize = 4096 // Buffer size for processing
+      const processor = audioContext.createScriptProcessor(bufferSize, 2, 2) // Stereo
+      audioProcessorRef.current = processor
+      
+      // Process audio data
+      processor.onaudioprocess = (event) => {
+        const inputBuffer = event.inputBuffer
+        const outputBuffer = event.outputBuffer
+        
+        // Get left and right channel data
+        const leftChannel = inputBuffer.getChannelData(0)
+        const rightChannel = inputBuffer.getChannelData(1)
+        
+        // Mix stereo to mono by averaging channels
+        const monoData = new Float32Array(bufferSize)
+        for (let i = 0; i < bufferSize; i++) {
+          monoData[i] = (leftChannel[i] + rightChannel[i]) / 2
+        }
+        
+        // Downsample from 48kHz to 16kHz (3:1 ratio)
+        const downsampleRatio = 3
+        const outputSamples = Math.floor(bufferSize / downsampleRatio)
+        const downsampledData = new Float32Array(outputSamples)
+        
+        for (let i = 0; i < outputSamples; i++) {
+          // Simple downsampling - take every 3rd sample
+          downsampledData[i] = monoData[i * downsampleRatio]
+        }
+        
+        // Convert float32 to int16 PCM data (16kHz mono)
+        const pcmData = new Int16Array(outputSamples)
+        for (let i = 0; i < outputSamples; i++) {
+          const sample = Math.max(-1, Math.min(1, downsampledData[i]))
+          pcmData[i] = sample * 0x7FFF
+        }
+        
+        // Send PCM data to server for processing
+        if (sfuSocketRef.current) {
+          sfuSocketRef.current.emit('audio-data', Array.from(pcmData))
+        }
+        
+        // Copy input to output but muted to avoid feedback
+        for (let channel = 0; channel < outputBuffer.numberOfChannels; channel++) {
+          const outputData = outputBuffer.getChannelData(channel)
+          outputData.fill(0) // Fill with silence to prevent feedback
+        }
+      }
+      
+      // Connect audio processing chain
+      source.connect(processor)
+      processor.connect(audioContext.destination) // Connect to ensure processing happens
+      
+      console.log('[DEBUG] Audio processing pipeline connected')
+      
+    } catch (error) {
+      console.error('[DEBUG] Audio processing setup error:', error)
+    }
   }
 
   return (

@@ -42,6 +42,8 @@ export default function Viewer() {
   const processedFramesRef = useRef<Map<string, string>>(new Map())
   const canvasStreamRef = useRef<MediaStream | null>(null)
   const isStreamInitialized = useRef<boolean>(false)
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const audioBufferSourceRef = useRef<AudioBufferSourceNode | null>(null)
 
   useEffect(() => {
     setMounted(true)
@@ -134,6 +136,7 @@ export default function Viewer() {
         // Set up event handlers
         setupEventHandlers()
         setupProcessedFrameHandlers()
+        setupAudioHandlers()
 
         // Request existing producers
         console.log('[VIEWER] Requesting existing producers...')
@@ -225,6 +228,67 @@ export default function Viewer() {
           processedFramesRef.current.delete(oldestFrame)
         }
       })
+    }
+    
+    const setupAudioHandlers = () => {
+      if (!sfuSocketRef.current) return
+      
+      // Initialize Audio Context for processed audio playback
+      try {
+        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)()
+        console.log('[VIEWER] Audio context initialized for processed audio playback')
+      } catch (error) {
+        console.error('[VIEWER] Failed to initialize audio context:', error)
+      }
+      
+      // Handle processed audio from server
+      sfuSocketRef.current.on('processed-audio', (data: any) => {
+        console.log('[VIEWER] Received processed audio:', {
+          dataSize: data.audioData.length,
+          piiCount: data.metadata?.pii_count || 0,
+          timestamp: data.timestamp
+        })
+        
+        // Play processed audio
+        playProcessedAudio(data.audioData)
+        
+        // Update stats
+        setStats(prev => ({
+          ...prev,
+          receivingAudio: true,
+          hostStreaming: true
+        }))
+      })
+    }
+    
+    const playProcessedAudio = async (audioData: number[]) => {
+      if (!audioContextRef.current) return
+      
+      try {
+        const audioContext = audioContextRef.current
+        
+        // Convert int16 array back to float32 audio buffer
+        const pcmData = new Int16Array(audioData)
+        const audioBuffer = audioContext.createBuffer(1, pcmData.length, 16000) // Mono, 16kHz
+        
+        // Convert to float32 mono
+        const monoChannel = audioBuffer.getChannelData(0)
+        
+        for (let i = 0; i < audioBuffer.length; i++) {
+          monoChannel[i] = pcmData[i] / 32767.0
+        }
+        
+        // Create and play audio buffer source
+        const source = audioContext.createBufferSource()
+        source.buffer = audioBuffer
+        source.connect(audioContext.destination)
+        source.start()
+        
+        console.log('[VIEWER] Playing processed audio chunk:', audioBuffer.duration, 'seconds')
+        
+      } catch (error) {
+        console.error('[VIEWER] Error playing processed audio:', error)
+      }
     }
     
     const displayProcessedFrame = (frameData: string, boundingBoxCount: number = 0) => {
@@ -395,6 +459,17 @@ export default function Viewer() {
         canvasStreamRef.current = null
       }
       isStreamInitialized.current = false
+      
+      // Clean up audio context
+      if (audioContextRef.current) {
+        audioContextRef.current.close()
+        audioContextRef.current = null
+      }
+      
+      if (audioBufferSourceRef.current) {
+        audioBufferSourceRef.current.stop()
+        audioBufferSourceRef.current = null
+      }
     }
   }, [roomId, mounted])
 

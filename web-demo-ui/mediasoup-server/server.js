@@ -18,6 +18,17 @@ try {
   fetch = null;
 }
 
+// Import Audio Redaction Processor
+const { AudioRedactionProcessor } = require('./audio-redaction-processor');
+
+// Initialize Audio Redaction Processor  
+const audioRedactionProcessor = new AudioRedactionProcessor({
+  redactionServiceUrl: 'http://localhost:5002',
+  sampleRate: 16000,  // Match Vosk requirements
+  channels: 1,        // Mono for better transcription
+  bufferDurationMs: 3000
+});
+
 const app = express();
 const server = http.createServer(app);
 app.use(cors());
@@ -390,12 +401,57 @@ io.on('connection', socket => {
       const transport = room.hostTransports.get(socket.id);
       if (!transport) return callback({ error: 'Transport not found' });
 
-      const producer = await transport.produce({ kind, rtpParameters });
+      let producer = await transport.produce({ kind, rtpParameters });
       producers.set(producer.id, producer);
-      room.hostProducers.set(kind, producer);
-
-      // Video frame processing setup
-      if (kind === 'video') {
+      
+      // Audio redaction processing setup
+      if (kind === 'audio') {
+        console.log('[SERVER] Setting up audio redaction for producer:', producer.id);
+        try {
+          // Setup audio processing pipeline
+          const processedProducer = await audioRedactionProcessor.setupAudioProcessing(roomId, producer, router);
+          
+          // Store both original and processed producers
+          room.hostProducers.set(kind, producer); // Keep original for fallback
+          room.hostProducers.set('processed-audio', processedProducer);
+          
+          // Set up socket listener for raw audio data from client
+          socket.on('audio-data', async (audioData) => {
+            try {
+              // Convert array back to Int16Array, then to Buffer
+              const int16Array = new Int16Array(audioData);
+              const audioBuffer = Buffer.from(int16Array.buffer);
+              
+              console.log(`[SERVER] Received audio data for room ${roomId}:`, audioBuffer.length, 'bytes');
+              
+              // Process audio through redaction service
+              const result = await audioRedactionProcessor.addAudioChunk(roomId, audioBuffer);
+              
+              if (result && result.success) {
+                console.log('[SERVER] Audio processed successfully, sending to viewers');
+                
+                // Send processed audio to viewers
+                room.viewers.forEach(viewerId => {
+                  io.to(viewerId).emit('processed-audio', {
+                    audioData: Array.from(new Int16Array(result.processedAudio.buffer)),
+                    metadata: result.metadata,
+                    timestamp: Date.now()
+                  });
+                });
+              }
+              
+            } catch (error) {
+              console.error('[SERVER] Audio processing error:', error);
+            }
+          });
+          
+        } catch (error) {
+          console.error('[SERVER] Audio redaction setup failed:', error);
+          room.hostProducers.set(kind, producer); // Fallback to original
+        }
+      }
+      // Video frame processing setup  
+      else if (kind === 'video') {
         console.log('[SERVER] Setting up video frame processing for producer:', producer.id);
         
         // Set up frame processing pipeline
@@ -420,7 +476,7 @@ io.on('connection', socket => {
             let processedFrame = frameData.frame; // Default to original frame
             
             // Process every 15th frame for detection
-            if (true) {
+            if (state.frameCount % 15 === 1) {
               console.log(`[SERVER] Processing frame ${state.frameCount} for detection`);
               try {
                 // Get detection data from Python service
@@ -451,6 +507,8 @@ io.on('connection', socket => {
             } else {
               processedFrame = frameData.frame;
             }
+            
+            // Video processing is independent - no audio sync blocking
             
             // Store processed frame with timestamp
             if (!frameBuffer.has(roomId)) frameBuffer.set(roomId, []);
@@ -621,8 +679,16 @@ io.on('connection', socket => {
     // Clean up room associations
     for (const [roomId, room] of rooms.entries()) {
       if (room.host === socket.id) {
-        // Host disconnected - notify viewers
+        // Host disconnected - notify viewers and cleanup audio redaction
         socket.to(roomId).emit('host-disconnected');
+        
+        // Clean up audio redaction for this room
+        try {
+          audioRedactionProcessor.cleanup(roomId);
+        } catch (error) {
+          console.error('[SERVER] Error cleaning up audio redaction:', error);
+        }
+        
         rooms.delete(roomId);
       } else if (room.viewers.has(socket.id)) {
         // Viewer disconnected

@@ -85,17 +85,46 @@ export class MediasoupClient {
   async produce(stream: MediaStream, enableVideoFilter: boolean = false) {
     if (!this.producerTransport) throw new Error('Producer transport not initialized')
     console.log('[MediasoupClient] Starting to produce tracks from local stream...')
+    
+    // Log stream details
+    console.log('[MediasoupClient] Stream details:', {
+      id: stream.id,
+      active: stream.active,
+      videoTracks: stream.getVideoTracks().length,
+      audioTracks: stream.getAudioTracks().length
+    })
 
     const videoTrack = stream.getVideoTracks()[0]
     if (videoTrack) {
+      console.log('[MediasoupClient] Video track details:', {
+        id: videoTrack.id,
+        kind: videoTrack.kind,
+        enabled: videoTrack.enabled,
+        muted: videoTrack.muted,
+        readyState: videoTrack.readyState,
+        settings: videoTrack.getSettings()
+      })
       this.videoProducer = await this.producerTransport.produce({ track: videoTrack })
       console.log('[MediasoupClient] Video track produced:', this.videoProducer.id)
+    } else {
+      console.warn('[MediasoupClient] No video track found in stream')
     }
 
     const audioTrack = stream.getAudioTracks()[0]
     if (audioTrack) {
-      await this.producerTransport.produce({ track: audioTrack })
-      console.log('[MediasoupClient] Audio track produced')
+      console.log('[MediasoupClient] Audio track details:', {
+        id: audioTrack.id,
+        kind: audioTrack.kind,
+        enabled: audioTrack.enabled,
+        muted: audioTrack.muted,
+        readyState: audioTrack.readyState,
+        settings: audioTrack.getSettings()
+      })
+      const audioProducer = await this.producerTransport.produce({ track: audioTrack })
+      console.log('[MediasoupClient] Audio track produced:', audioProducer.id)
+      console.log('[MediasoupClient] 🎤 MICROPHONE AUDIO IS NOW BEING SENT TO MEDIASOUP SERVER')
+    } else {
+      console.error('[MediasoupClient] ❌ NO AUDIO TRACK FOUND IN STREAM - MICROPHONE ACCESS FAILED')
     }
 
     console.log('[MediasoupClient] All tracks are now being sent to SFU')
