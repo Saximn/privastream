@@ -335,6 +335,50 @@ io.on('connection', socket => {
     };
     rooms.set(roomId, room);
     socket.join(roomId);
+    
+    // Set up audio processing for this room (since audio is handled via socket events, not WebRTC producers)
+    console.log('[AUDIO-SERVER] 🎤 Setting up audio redaction for room:', roomId);
+    
+    socket.on('audio-data', async (audioData) => {
+      try {
+        // Convert array back to Int16Array, then to Buffer
+        const int16Array = new Int16Array(audioData);
+        const audioBuffer = Buffer.from(int16Array.buffer);
+        
+        console.log(`[AUDIO-SERVER] 🎤 Received audio data for room ${roomId}:`, audioBuffer.length, 'bytes');
+        
+        // Process audio through redaction service
+        const result = await audioRedactionProcessor.addAudioChunk(roomId, audioBuffer);
+        
+        if (result && result.success) {
+          console.log('[AUDIO-SERVER] ✅ Audio processed successfully, sending to viewers');
+          console.log('[AUDIO-SERVER] 🎤 Processed audio metadata:', {
+            piiCount: result.metadata?.pii_count || 0,
+            processingTime: result.metadata?.processing_time || 0,
+            transcript: result.metadata?.transcript ? result.metadata.transcript.substring(0, 50) + '...' : 'empty'
+          });
+          
+          // Send processed audio to viewers
+          const room = rooms.get(roomId);
+          if (room) {
+            room.viewers.forEach(viewerId => {
+              io.to(viewerId).emit('processed-audio', {
+                audioData: Array.from(new Int16Array(result.processedAudio.buffer)),
+                metadata: result.metadata,
+                timestamp: Date.now()
+              });
+            });
+          }
+        } else {
+          console.log('[AUDIO-SERVER] ⚠️ Audio processing failed or not ready yet');
+        }
+        
+      } catch (error) {
+        console.error('[AUDIO-SERVER] ❌ Audio processing error:', error);
+      }
+    });
+    
+    console.log(`[AUDIO-SERVER] Room created: ${roomId} with audio processing enabled`);
     callback({ success: true, roomId, mediasoupUrl: 'http://localhost:3001' });
   });
 
@@ -414,51 +458,10 @@ io.on('connection', socket => {
       let producer = await transport.produce({ kind, rtpParameters });
       producers.set(producer.id, producer);
       
-      // Audio redaction processing setup
+      // Audio is handled via socket events (not WebRTC producers), so skip audio producer processing
       if (kind === 'audio') {
-        console.log('[SERVER] Setting up audio redaction for producer:', producer.id);
-        try {
-          // Setup audio processing pipeline
-          const processedProducer = await audioRedactionProcessor.setupAudioProcessing(roomId, producer, router);
-          
-          // Store both original and processed producers
-          room.hostProducers.set(kind, producer); // Keep original for fallback
-          room.hostProducers.set('processed-audio', processedProducer);
-          
-          // Set up socket listener for raw audio data from client
-          socket.on('audio-data', async (audioData) => {
-            try {
-              // Convert array back to Int16Array, then to Buffer
-              const int16Array = new Int16Array(audioData);
-              const audioBuffer = Buffer.from(int16Array.buffer);
-              
-              console.log(`[SERVER] Received audio data for room ${roomId}:`, audioBuffer.length, 'bytes');
-              
-              // Process audio through redaction service
-              const result = await audioRedactionProcessor.addAudioChunk(roomId, audioBuffer);
-              
-              if (result && result.success) {
-                console.log('[SERVER] Audio processed successfully, sending to viewers');
-                
-                // Send processed audio to viewers
-                room.viewers.forEach(viewerId => {
-                  io.to(viewerId).emit('processed-audio', {
-                    audioData: Array.from(new Int16Array(result.processedAudio.buffer)),
-                    metadata: result.metadata,
-                    timestamp: Date.now()
-                  });
-                });
-              }
-              
-            } catch (error) {
-              console.error('[SERVER] Audio processing error:', error);
-            }
-          });
-          
-        } catch (error) {
-          console.error('[SERVER] Audio redaction setup failed:', error);
-          room.hostProducers.set(kind, producer); // Fallback to original
-        }
+        console.log('[SERVER] ⚠️ Audio producer created but audio processing is handled via socket events');
+        room.hostProducers.set(kind, producer);
       }
       // Video processing setup using WebRTC tracks
       else if (kind === 'video') {
