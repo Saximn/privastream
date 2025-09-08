@@ -550,13 +550,21 @@ io.on('connection', socket => {
                 body: JSON.stringify({ 
                   frame: frame, // Host already sends full data:image/jpeg;base64, URL
                   detect_only: true,
-                  frame_id: state.frameCount
+                  frame_id: state.frameCount,
+                  timestamp: timestamp || Date.now()  // Add timestamp for request age validation
                 }),
                 timeout: 5000
               });
               
               if (response.ok) {
                 const result = await response.json();
+                
+                // Check if request was dropped by Python API
+                if (result.dropped) {
+                  console.log(`[VIDEO-SERVER] 🗑️ Request dropped by Python API: ${result.reason} - Frame ${frameId}`);
+                  return; // Don't send anything to viewers
+                }
+                
                 console.log('[VIDEO-SERVER] ✅ Python service responded successfully:', {
                   rectangles: result.rectangles?.length || 0,
                   frame: result.frame ? 'received' : 'missing'
@@ -584,7 +592,14 @@ io.on('connection', socket => {
                   }
                 }, delayNeeded); // Dynamic delay to achieve 8 seconds total from capture
               } else {
-                console.log('[VIDEO-SERVER] ❌ Python service error:', response.status);
+                // Handle dropped requests (429, 503) vs actual errors
+                if (response.status === 429) {
+                  console.log(`[VIDEO-SERVER] 🗑️ Request too old - Frame ${frameId} dropped by Python API`);
+                } else if (response.status === 503) {
+                  console.log(`[VIDEO-SERVER] 🚫 Server overloaded - Frame ${frameId} dropped by Python API`);
+                } else {
+                  console.log('[VIDEO-SERVER] ❌ Python service error:', response.status);
+                }
                 console.log('[VIDEO-SERVER] 🔒 PRIVACY PROTECTION: Dropping frame instead of sending unprocessed video');
                 
                 // PRIVACY FIX: Drop the frame entirely instead of sending unprocessed video

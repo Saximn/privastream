@@ -10,6 +10,8 @@ import numpy as np
 import json
 import sys
 import os
+import time
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -40,7 +42,54 @@ DEBUG_CONFIG = {
     "max_images": 100  # Limit to prevent disk space issues
 }
 
+# Request queue protection configuration
+QUEUE_CONFIG = {
+    "max_request_age_ms": 1000,  # Drop requests older than 1 second
+    "max_concurrent_requests": 3,  # Limit concurrent processing to prevent GPU overload
+    "enable_request_dropping": True,  # Enable/disable request age checking
+    "queue_monitoring": True  # Enable queue monitoring logs
+}
+
 detector = None
+active_requests = 0  # Track concurrent processing requests
+request_lock = threading.Lock()  # Thread lock for request counting
+
+def is_request_stale(request_timestamp_ms):
+    """Check if request is too old to process."""
+    if not QUEUE_CONFIG["enable_request_dropping"]:
+        return False
+    
+    current_time_ms = int(time.time() * 1000)
+    request_age_ms = current_time_ms - request_timestamp_ms
+    
+    if QUEUE_CONFIG["queue_monitoring"]:
+        print(f"[QUEUE] Request age: {request_age_ms}ms (max: {QUEUE_CONFIG['max_request_age_ms']}ms)")
+    
+    return request_age_ms > QUEUE_CONFIG["max_request_age_ms"]
+
+def can_process_request():
+    """Check if we can process another request (not at concurrent limit)."""
+    with request_lock:
+        can_process = active_requests < QUEUE_CONFIG["max_concurrent_requests"]
+        if QUEUE_CONFIG["queue_monitoring"]:
+            print(f"[QUEUE] Active requests: {active_requests}/{QUEUE_CONFIG['max_concurrent_requests']}, Can process: {can_process}")
+        return can_process
+
+def start_request_processing():
+    """Mark start of request processing."""
+    global active_requests
+    with request_lock:
+        active_requests += 1
+        if QUEUE_CONFIG["queue_monitoring"]:
+            print(f"[QUEUE] Started processing request, active: {active_requests}")
+
+def finish_request_processing():
+    """Mark end of request processing."""
+    global active_requests
+    with request_lock:
+        active_requests = max(0, active_requests - 1)  # Prevent negative counts
+        if QUEUE_CONFIG["queue_monitoring"]:
+            print(f"[QUEUE] Finished processing request, active: {active_requests}")
 
 def setup_debug_directories():
     """Create debug output directories if they don't exist."""
@@ -221,51 +270,95 @@ def health():
 @app.route('/process-frame', methods=['POST'])
 def process_frame_route():
     """Flask route to process a single frame with detection or blur-only mode."""
+    processing_started = False
+    
     try:
         data = request.get_json()
         if not data or 'frame' not in data:
             return jsonify({"error": "Missing frame data"}), 400
 
-        frame_data = data['frame']
-        if frame_data.startswith('data:image'):
-            frame_data = frame_data.split(',')[1]
-
-        img_bytes = base64.b64decode(frame_data)
-        img_array = np.frombuffer(img_bytes, dtype=np.uint8)
-        frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-        if frame is None:
-            return jsonify({"error": "Invalid image data"}), 400
-
+        # Get request timestamp (from client or use current time)
+        request_timestamp = data.get('timestamp', int(time.time() * 1000))
         frame_id = data.get('frame_id', 0)
-        blur_only = data.get('blur_only', False)
-        provided_rectangles = data.get('rectangles', [])
-        detect_only = data.get('detect_only', False)
         
-        # Log processing mode
-        if blur_only:
-            print(f"[API] Processing frame {frame_id} in BLUR_ONLY mode with {len(provided_rectangles)} rectangles")
-        elif detect_only:
-            print(f"[API] Processing frame {frame_id} in DETECT_ONLY mode (full detection)")
-        else:
-            print(f"[API] Processing frame {frame_id} in FULL mode")
+        # 1. Check if request is too old
+        if is_request_stale(request_timestamp):
+            print(f"[QUEUE] 🗑️ DROPPING STALE REQUEST - Frame {frame_id} is too old to process")
+            return jsonify({
+                "success": False,
+                "error": "Request too old",
+                "frame_id": frame_id,
+                "dropped": True,
+                "reason": "stale_request"
+            }), 429  # Too Many Requests
         
-        blurred_frame_b64, rectangles = filter_frame(
-            frame, 
-            frame_id, 
-            blur_only=blur_only, 
-            provided_rectangles=provided_rectangles
-        )
+        # 2. Check concurrent request limit
+        if not can_process_request():
+            print(f"[QUEUE] 🚫 DROPPING REQUEST - Too many concurrent requests, Frame {frame_id}")
+            return jsonify({
+                "success": False,
+                "error": "Server overloaded",
+                "frame_id": frame_id,
+                "dropped": True,
+                "reason": "overloaded"
+            }), 503  # Service Unavailable
+        
+        # 3. Mark request as started
+        start_request_processing()
+        processing_started = True
+        
+        try:
+            frame_data = data['frame']
+            if frame_data.startswith('data:image'):
+                frame_data = frame_data.split(',')[1]
 
-        return jsonify({
-            "success": True,
-            "frame_id": frame_id,
-            "frame": blurred_frame_b64,
-            "rectangles": rectangles,
-            "processing_mode": "blur_only" if blur_only else ("detect_only" if detect_only else "full"),
-            "regions_processed": len(rectangles)
-        })
+            img_bytes = base64.b64decode(frame_data)
+            img_array = np.frombuffer(img_bytes, dtype=np.uint8)
+            frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+            if frame is None:
+                return jsonify({"error": "Invalid image data"}), 400
+
+            blur_only = data.get('blur_only', False)
+            provided_rectangles = data.get('rectangles', [])
+            detect_only = data.get('detect_only', False)
+            
+            # Log processing mode
+            if blur_only:
+                print(f"[API] Processing frame {frame_id} in BLUR_ONLY mode with {len(provided_rectangles)} rectangles")
+            elif detect_only:
+                print(f"[API] Processing frame {frame_id} in DETECT_ONLY mode (full detection)")
+            else:
+                print(f"[API] Processing frame {frame_id} in FULL mode")
+            
+            blurred_frame_b64, rectangles = filter_frame(
+                frame, 
+                frame_id, 
+                blur_only=blur_only, 
+                provided_rectangles=provided_rectangles
+            )
+
+            return jsonify({
+                "success": True,
+                "frame_id": frame_id,
+                "frame": blurred_frame_b64,
+                "rectangles": rectangles,
+                "processing_mode": "blur_only" if blur_only else ("detect_only" if detect_only else "full"),
+                "regions_processed": len(rectangles)
+            })
+        
+        finally:
+            # Always mark request as finished if we started processing
+            if processing_started:
+                finish_request_processing()
 
     except Exception as e:
+        # Make sure to finish request processing if we started it
+        if processing_started:
+            try:
+                finish_request_processing()
+            except:
+                pass  # Ignore errors in cleanup
+        
         print(f"[API] Frame processing error: {e}")
         return jsonify({"error": str(e)}), 500
 
@@ -367,10 +460,58 @@ def cleanup_debug_images_endpoint():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/queue-status')
+def queue_status():
+    """Get current queue and processing status."""
+    global active_requests
+    with request_lock:
+        return jsonify({
+            "active_requests": active_requests,
+            "max_concurrent": QUEUE_CONFIG["max_concurrent_requests"],
+            "can_accept_new": active_requests < QUEUE_CONFIG["max_concurrent_requests"],
+            "max_request_age_ms": QUEUE_CONFIG["max_request_age_ms"],
+            "request_dropping_enabled": QUEUE_CONFIG["enable_request_dropping"],
+            "queue_monitoring": QUEUE_CONFIG["queue_monitoring"],
+            "current_time_ms": int(time.time() * 1000)
+        })
+
+@app.route('/queue-config', methods=['POST'])
+def update_queue_config():
+    """Update queue configuration."""
+    global QUEUE_CONFIG
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No configuration data provided"}), 400
+        
+        # Update configuration
+        if "max_request_age_ms" in data:
+            QUEUE_CONFIG["max_request_age_ms"] = int(data["max_request_age_ms"])
+        if "max_concurrent_requests" in data:
+            QUEUE_CONFIG["max_concurrent_requests"] = int(data["max_concurrent_requests"])
+        if "enable_request_dropping" in data:
+            QUEUE_CONFIG["enable_request_dropping"] = bool(data["enable_request_dropping"])
+        if "queue_monitoring" in data:
+            QUEUE_CONFIG["queue_monitoring"] = bool(data["queue_monitoring"])
+        
+        return jsonify({
+            "success": True, 
+            "message": "Queue configuration updated",
+            "config": QUEUE_CONFIG
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == '__main__':
     print("Starting Video Filter API...")
     print(f"Detector config:\n{json.dumps(DETECTOR_CONFIG, indent=2)}")
     print(f"Debug config:\n{json.dumps(DEBUG_CONFIG, indent=2)}")
+    print(f"Queue config:\n{json.dumps(QUEUE_CONFIG, indent=2)}")
+    print("\n🛡️ QUEUE PROTECTION FEATURES:")
+    print(f"   • Drop requests older than {QUEUE_CONFIG['max_request_age_ms']}ms")
+    print(f"   • Max concurrent requests: {QUEUE_CONFIG['max_concurrent_requests']}")
+    print(f"   • Request dropping: {'ENABLED' if QUEUE_CONFIG['enable_request_dropping'] else 'DISABLED'}")
+    print(f"   • Queue monitoring: {'ENABLED' if QUEUE_CONFIG['queue_monitoring'] else 'DISABLED'}")
     
     # Initialize debug directories on startup
     setup_debug_directories()
