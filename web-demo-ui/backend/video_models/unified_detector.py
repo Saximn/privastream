@@ -91,7 +91,7 @@ class UnifiedBlurDetector:
             try:
                 plate_config = self.config.get("plate", {})
                 self.models["plate"] = PlateDetector(
-                    weights_path=plate_config.get("weights_path", "models/plate_blur/best.pt"),
+                    weights_path=plate_config.get("weights_path", os.path.join(os.path.dirname(__file__), "plate_blur/best.pt")),
                     imgsz=plate_config.get("imgsz", 960),
                     conf_thresh=plate_config.get("conf_thresh", 0.25),
                     iou_thresh=plate_config.get("iou_thresh", 0.5),
