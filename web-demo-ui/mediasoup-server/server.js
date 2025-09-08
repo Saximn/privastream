@@ -373,9 +373,22 @@ io.on('connection', socket => {
             transcript: result.metadata?.transcript ? result.metadata.transcript.substring(0, 50) + '...' : 'empty'
           });
           
-          // Calculate delay based on estimated chunk start time to achieve 8 seconds total
-          const targetOutputTime = chunkStartTime + 8000; // 8 seconds from when chunk started
+          // SLIDING WINDOW FIX: Account for the fact that sliding window output represents
+          // audio from 3 seconds earlier (we output the second half of [previous + current])
+          // So we need to reduce the delay by 3 seconds to maintain sync with video
+          const slidingWindowOffset = result.metadata?.hadPreviousChunk ? 3000 : 0;
+          const effectiveChunkStartTime = chunkStartTime - slidingWindowOffset;
+          
+          // Calculate delay based on effective chunk start time to achieve 8 seconds total
+          const targetOutputTime = effectiveChunkStartTime + 8000; // 8 seconds from effective start
           const delayNeeded = Math.max(0, targetOutputTime - Date.now());
+          
+          console.log('[AUDIO-SERVER] 🕐 Sliding window timing adjustment:', {
+            originalChunkStart: chunkStartTime,
+            slidingWindowOffset: slidingWindowOffset,
+            effectiveChunkStart: effectiveChunkStartTime,
+            delayNeeded: delayNeeded
+          });
           
           setTimeout(() => {
             const room = rooms.get(roomId);

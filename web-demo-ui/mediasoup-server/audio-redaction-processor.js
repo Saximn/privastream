@@ -18,6 +18,9 @@ class AudioRedactionProcessor {
     this.pcmBuffer = Buffer.alloc(0);
     this.processedProducers = new Map();
     
+    // Sliding window: store previous chunks per room for overlap processing
+    this.previousChunks = new Map(); // roomId -> previous 3-second chunk
+    
     console.log('[AUDIO-REDACTION-PROCESSOR] Initialized:', {
       bufferSize: this.bufferSize,
       sampleRate: this.options.sampleRate,
@@ -100,14 +103,26 @@ class AudioRedactionProcessor {
   }
   
   /**
-   * Process raw audio buffer through redaction service
+   * Process raw audio buffer through redaction service with sliding window
    */
-  async processAudioBuffer(audioBuffer) {
+  async processAudioBufferSlidingWindow(roomId, currentChunk, previousChunk = null) {
     try {
-      console.log('[AUDIO-REDACTION-PROCESSOR] Processing audio buffer:', audioBuffer.length, 'bytes');
+      let processingBuffer;
+      let isFirstChunk = false;
+      
+      if (previousChunk) {
+        // Combine previous + current for sliding window processing
+        processingBuffer = Buffer.concat([previousChunk, currentChunk]);
+        console.log(`[AUDIO-REDACTION-PROCESSOR] Sliding window: processing ${processingBuffer.length} bytes (previous: ${previousChunk.length} + current: ${currentChunk.length})`);
+      } else {
+        // First chunk - no previous data
+        processingBuffer = currentChunk;
+        isFirstChunk = true;
+        console.log(`[AUDIO-REDACTION-PROCESSOR] First chunk: processing ${processingBuffer.length} bytes`);
+      }
       
       // Convert audio buffer to base64 for transmission
-      const audioBase64 = audioBuffer.toString('base64');
+      const audioBase64 = processingBuffer.toString('base64');
       
       // Send to redaction service
       const response = await fetch(`${this.options.redactionServiceUrl}/process_audio`, {
@@ -128,24 +143,46 @@ class AudioRedactionProcessor {
       
       if (result.success) {
         // Convert processed audio back to buffer
-        const processedBuffer = Buffer.from(result.redacted_audio_data, 'base64');
+        const fullProcessedBuffer = Buffer.from(result.redacted_audio_data, 'base64');
+        
+        let outputBuffer;
+        if (isFirstChunk) {
+          // First chunk: return entire processed buffer
+          outputBuffer = fullProcessedBuffer;
+        } else {
+          // Subsequent chunks: extract only the new portion (second half)
+          const halfLength = Math.floor(fullProcessedBuffer.length / 2);
+          outputBuffer = fullProcessedBuffer.slice(halfLength);
+          console.log(`[AUDIO-REDACTION-PROCESSOR] Sliding window: extracted new portion ${outputBuffer.length}/${fullProcessedBuffer.length} bytes`);
+        }
         
         console.log('[AUDIO-REDACTION-PROCESSOR] Audio processed successfully:', {
           piiCount: result.pii_count,
           processingTime: result.processing_time,
-          transcript: result.transcript?.substring(0, 100) + '...'
+          transcript: result.transcript?.substring(0, 100) + '...',
+          totalProcessed: fullProcessedBuffer.length,
+          outputSize: outputBuffer.length,
+          slidingWindow: !isFirstChunk
         });
         
         return {
           success: true,
-          processedAudio: processedBuffer,
-          metadata: result
+          processedAudio: outputBuffer,
+          metadata: {
+            ...result,
+            hadPreviousChunk: !isFirstChunk,
+            slidingWindow: !isFirstChunk
+          }
         };
       } else {
         console.error('[AUDIO-REDACTION-PROCESSOR] Processing failed:', result.error);
         return {
           success: false,
-          processedAudio: audioBuffer, // Return original as fallback
+          processedAudio: currentChunk, // Return current chunk as fallback
+          metadata: {
+            hadPreviousChunk: !isFirstChunk,
+            slidingWindow: !isFirstChunk
+          },
           error: result.error
         };
       }
@@ -154,14 +191,25 @@ class AudioRedactionProcessor {
       console.error('[AUDIO-REDACTION-PROCESSOR] Error processing audio:', error);
       return {
         success: false,
-        processedAudio: audioBuffer, // Return original as fallback
+        processedAudio: currentChunk, // Return current chunk as fallback
+        metadata: {
+          hadPreviousChunk: !isFirstChunk,
+          slidingWindow: !isFirstChunk
+        },
         error: error.message
       };
     }
   }
+
+  /**
+   * Process raw audio buffer through redaction service (legacy method)
+   */
+  async processAudioBuffer(audioBuffer) {
+    return this.processAudioBufferSlidingWindow('default', audioBuffer, null);
+  }
   
   /**
-   * Add audio chunk to buffer and process when ready
+   * Add audio chunk to buffer and process when ready with sliding window
    */
   async addAudioChunk(roomId, audioChunk) {
     try {
@@ -172,21 +220,29 @@ class AudioRedactionProcessor {
       
       // Check if we have enough data (3 seconds worth)
       if (this.pcmBuffer.length >= this.bufferSize) {
-        // Extract 3-second chunk
-        const processChunk = this.pcmBuffer.slice(0, this.bufferSize);
+        // Extract current 3-second chunk
+        const currentChunk = this.pcmBuffer.slice(0, this.bufferSize);
         this.pcmBuffer = this.pcmBuffer.slice(this.bufferSize);
         
-        console.log('[AUDIO-REDACTION-PROCESSOR] Processing 3-second audio chunk for room:', roomId);
-        console.log('[AUDIO-REDACTION-PROCESSOR] Processing audio buffer:', processChunk.length, 'bytes');
+        // Get previous chunk for sliding window
+        const previousChunk = this.previousChunks.get(roomId);
         
-        // Process the chunk
-        const result = await this.processAudioBuffer(processChunk);
+        console.log('[AUDIO-REDACTION-PROCESSOR] Processing 3-second audio chunk for room:', roomId);
+        console.log('[AUDIO-REDACTION-PROCESSOR] Current chunk:', currentChunk.length, 'bytes, Previous chunk:', previousChunk ? previousChunk.length : 0, 'bytes');
+        
+        // Process with sliding window
+        const result = await this.processAudioBufferSlidingWindow(roomId, currentChunk, previousChunk);
+        
+        // Store current chunk as previous for next iteration
+        this.previousChunks.set(roomId, currentChunk);
         
         if (result.success) {
-          console.log('[AUDIO-REDACTION-PROCESSOR] Audio processed successfully:', {
+          console.log('[AUDIO-REDACTION-PROCESSOR] Sliding window audio processed successfully:', {
             piiCount: result.metadata.pii_count,
             processingTime: result.metadata.processing_time,
-            transcript: result.metadata.transcript ? result.metadata.transcript.substring(0, 50) + '...' : 'empty'
+            transcript: result.metadata.transcript ? result.metadata.transcript.substring(0, 50) + '...' : 'empty',
+            outputSize: result.processedAudio.length,
+            hadPreviousChunk: !!previousChunk
           });
         }
         
@@ -214,6 +270,12 @@ class AudioRedactionProcessor {
           producer.transport.close();
         }
         this.processedProducers.delete(roomId);
+      }
+      
+      // Clean up sliding window data for this room
+      if (this.previousChunks.has(roomId)) {
+        this.previousChunks.delete(roomId);
+        console.log('[AUDIO-REDACTION-PROCESSOR] Cleared previous chunk for room:', roomId);
       }
       
       // Reset buffer for this room (in a real implementation, you'd have per-room buffers)
