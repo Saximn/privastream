@@ -97,6 +97,20 @@ class FaceDetector:
             print(f"[FaceDetector][WARN] Reload failed: {e}")
             return False
     
+    def set_dynamic_embedding(self, embedding: np.ndarray) -> bool:
+        """Set creator embedding dynamically from memory (e.g., from enrollment)."""
+        try:
+            if embedding is not None and len(embedding) > 0:
+                self.creator_embedding = np.array(embedding, dtype=float)
+                print("[FaceDetector] Set dynamic embedding from memory.")
+                return True
+            else:
+                print("[FaceDetector][WARN] Invalid embedding provided.")
+                return False
+        except Exception as e:
+            print(f"[FaceDetector][WARN] Dynamic embedding failed: {e}")
+            return False
+    
     def set_panic_mode(self, panic: bool):
         """Toggle panic mode (blur entire frame)."""
         self.panic_mode = panic

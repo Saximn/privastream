@@ -1,0 +1,10 @@
+# Face Enrollment Server Requirements
+flask==2.3.3
+flask-cors==4.0.0
+numpy==1.24.3
+opencv-python==4.8.1.78
+insightface==0.7.3
+onnxruntime-gpu==1.16.0
+onnxruntime==1.16.0
+scikit-learn==1.3.0
+Pillow==10.0.1

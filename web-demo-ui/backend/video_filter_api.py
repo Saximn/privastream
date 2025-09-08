@@ -19,14 +19,23 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent / "video_models"))
 from video_models.unified_detector import UnifiedBlurDetector
 
+# InsightFace imports for face enrollment
+try:
+    import insightface
+    from insightface.app import FaceAnalysis
+    INSIGHTFACE_AVAILABLE = True
+except ImportError:
+    INSIGHTFACE_AVAILABLE = False
+    print("Warning: InsightFace not available. Face enrollment disabled.")
+
 app = Flask(__name__)
 CORS(app, origins="*")
 
 # Detector configuration
 DETECTOR_CONFIG = {
-    "enable_face": False,
+    "enable_face": True,
     "enable_pii": False,
-    "enable_plate": True,
+    "enable_plate": False,
     "pii": {
         "classifier_path": "video_models/pii_blur/pii_clf.joblib",
         "conf_thresh": 0.35
@@ -51,6 +60,8 @@ QUEUE_CONFIG = {
 }
 
 detector = None
+face_app = None  # Global face detection instance for enrollment
+room_embeddings = {}  # Store face embeddings per room: roomId -> {'embedding': np.array, 'metadata': {...}}
 active_requests = 0  # Track concurrent processing requests
 request_lock = threading.Lock()  # Thread lock for request counting
 
@@ -176,7 +187,7 @@ def cleanup_old_debug_images(directory):
 
 def init_detector():
     """Initialize the detector once."""
-    global detector
+    global detector, face_app
     if detector is None:
         try:
             detector = UnifiedBlurDetector(DETECTOR_CONFIG)
@@ -188,14 +199,28 @@ def init_detector():
         except Exception as e:
             print(f"[API] Failed to initialize detector: {e}")
             detector = "failed"
+    
+    # Initialize face detection for enrollment
+    if face_app is None and INSIGHTFACE_AVAILABLE:
+        try:
+            print("[API] Initializing InsightFace Buffalo_S for enrollment...")
+            face_app = FaceAnalysis(
+                name='buffalo_s',
+                providers=['CUDAExecutionProvider', 'CPUExecutionProvider']
+            )
+            face_app.prepare(ctx_id=0, det_size=(640, 640))
+            print("[API] ✅ InsightFace Buffalo_S initialized for enrollment")
+        except Exception as e:
+            print(f"[API] ❌ Failed to initialize InsightFace: {e}")
+            face_app = "failed"
 
-def filter_frame(frame, frame_id=0, blur_only=False, provided_rectangles=None):
+def filter_frame(frame, frame_id=0, blur_only=False, provided_rectangles=None, room_id=None):
     """
     Process a single frame with two modes:
     1. Full detection + blur (blur_only=False)
     2. CPU blur only using provided rectangles (blur_only=True)
     """
-    global detector
+    global detector, room_embeddings
     rectangles = []
     
     # Save debug input image (copy before any modifications)
@@ -214,6 +239,15 @@ def filter_frame(frame, frame_id=0, blur_only=False, provided_rectangles=None):
             init_detector()
         if detector == "failed":
             raise RuntimeError("Detector initialization failed")
+        
+        # Update face detector embedding if room has enrolled face
+        print(f"[API] DEBUG: Checking room_id='{room_id}', available rooms: {list(room_embeddings.keys())}")
+        if room_id and room_id in room_embeddings:
+            print(f"[API] ✅ Updating face embedding for room {room_id}")
+            embedding = room_embeddings[room_id]['embedding']  # Extract just the numpy array
+            detector.update_face_embedding(embedding)
+        else:
+            print(f"[API] ⚠️  No embedding found for room {room_id} (available: {list(room_embeddings.keys())})")
         
         print(f"[API] Full detection mode: processing frame {frame_id}")
         results = detector.process_frame(frame, frame_id)
@@ -280,6 +314,10 @@ def process_frame_route():
         # Get request timestamp (from client or use current time)
         request_timestamp = data.get('timestamp', int(time.time() * 1000))
         frame_id = data.get('frame_id', 0)
+        room_id = data.get('room_id', None)  # Get room_id for whitelist lookup
+        
+        if room_id:
+            print(f"[API] Processing frame {frame_id} for room {room_id}")
         
         # 1. Check if request is too old
         if is_request_stale(request_timestamp):
@@ -334,7 +372,8 @@ def process_frame_route():
                 frame, 
                 frame_id, 
                 blur_only=blur_only, 
-                provided_rectangles=provided_rectangles
+                provided_rectangles=provided_rectangles,
+                room_id=room_id
             )
 
             return jsonify({
@@ -500,6 +539,287 @@ def update_queue_config():
             "config": QUEUE_CONFIG
         })
     except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# Face Enrollment Endpoints
+@app.route('/face-detection', methods=['POST'])
+def face_detection():
+    """Live face detection endpoint for enrollment"""
+    global face_app
+    
+    try:
+        # Initialize face app if not already done
+        if face_app is None:
+            init_detector()
+        
+        if face_app == "failed" or not INSIGHTFACE_AVAILABLE:
+            return jsonify({
+                'success': False,
+                'error': 'Face detection not available',
+                'faces_detected': []
+            }), 503
+        
+        data = request.get_json()
+        if not data or 'frame_data' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'No frame data provided',
+                'faces_detected': []
+            }), 400
+        
+        frame_data = data['frame_data']
+        room_id = data.get('room_id', 'unknown')
+        
+        print(f"[ENROLLMENT] DEBUG - Received request with room_id: '{room_id}'")
+        
+        # Decode base64 image
+        try:
+            image_bytes = base64.b64decode(frame_data)
+            nparr = np.frombuffer(image_bytes, np.uint8)
+            image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            
+            if image is None:
+                return jsonify({
+                    'success': False,
+                    'error': 'Failed to decode image',
+                    'faces_detected': []
+                }), 400
+                
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'error': f'Image decode error: {str(e)}',
+                'faces_detected': []
+            }), 400
+        
+        # Detect faces using InsightFace
+        start_time = time.time()
+        faces = face_app.get(image)
+        detection_time = time.time() - start_time
+        
+        detected_faces = []
+        if faces:
+            # Select ONLY the largest face (the one to be enrolled)
+            max_face = max(faces, key=lambda x: (x.bbox[2]-x.bbox[0])*(x.bbox[3]-x.bbox[1]))
+            
+            bbox = max_face.bbox.astype(int)  # [x1, y1, x2, y2]
+            confidence = float(max_face.det_score)
+            
+            detected_faces.append({
+                'bbox': bbox.tolist(),
+                'confidence': confidence
+            })
+            
+            print(f"[ENROLLMENT] Detected {len(faces)} faces, showing largest one in {detection_time:.3f}s for room {room_id}")
+        else:
+            print(f"[ENROLLMENT] No faces detected in {detection_time:.3f}s for room {room_id}")
+        
+        return jsonify({
+            'success': True,
+            'faces_detected': detected_faces,
+            'detection_time': detection_time,
+            'room_id': room_id
+        })
+        
+    except Exception as e:
+        print(f"[ENROLLMENT] Face detection error: {e}")
+        return jsonify({
+            'success': False,
+            'error': f'Detection failed: {str(e)}',
+            'faces_detected': []
+        }), 500
+
+@app.route('/face-enrollment', methods=['POST'])
+def face_enrollment():
+    """Face enrollment endpoint"""
+    global face_app, room_embeddings
+    
+    try:
+        # Initialize face app if not already done
+        if face_app is None:
+            init_detector()
+        
+        if face_app == "failed" or not INSIGHTFACE_AVAILABLE:
+            return jsonify({
+                'success': False,
+                'error': 'Face enrollment not available',
+                'enrollment_complete': False
+            }), 503
+        
+        data = request.get_json()
+        if not data or 'frames' not in data or 'room_id' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'Missing frames or room_id',
+                'enrollment_complete': False
+            }), 400
+        
+        frames = data['frames']
+        room_id = data['room_id']
+        
+        if not isinstance(frames, list) or len(frames) == 0:
+            return jsonify({
+                'success': False,
+                'error': 'No frames provided for enrollment',
+                'enrollment_complete': False
+            }), 400
+        
+        print(f"[ENROLLMENT] Starting face enrollment for room: {room_id}")
+        print(f"[ENROLLMENT] Processing {len(frames)} frames")
+        
+        all_embeddings = []
+        valid_frames = 0
+        
+        for i, frame_data in enumerate(frames):
+            try:
+                # Decode base64 image
+                image_bytes = base64.b64decode(frame_data)
+                nparr = np.frombuffer(image_bytes, np.uint8)
+                image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                
+                if image is None:
+                    print(f"[ENROLLMENT] Failed to decode frame {i}")
+                    continue
+                
+                # Extract embeddings from this frame - SELECT MAX SIZE FACE ONLY
+                faces = face_app.get(image)
+                
+                if faces:
+                    # Find the largest face (max bounding box area)
+                    max_face = max(faces, key=lambda x: (x.bbox[2]-x.bbox[0])*(x.bbox[3]-x.bbox[1]))
+                    
+                    if hasattr(max_face, 'normed_embedding') and max_face.normed_embedding is not None:
+                        embedding = max_face.normed_embedding.astype(float)
+                        all_embeddings.append(embedding)
+                        valid_frames += 1
+                        
+                        # Calculate face area for logging
+                        face_area = (max_face.bbox[2]-max_face.bbox[0])*(max_face.bbox[3]-max_face.bbox[1])
+                        print(f"[ENROLLMENT] Frame {i}: extracted largest face embedding (area: {face_area:.0f}px, {len(faces)} total faces)")
+                    else:
+                        print(f"[ENROLLMENT] Frame {i}: no valid embedding from largest face")
+                else:
+                    print(f"[ENROLLMENT] Frame {i}: no faces detected")
+                    
+            except Exception as e:
+                print(f"[ENROLLMENT] Error processing frame {i}: {e}")
+                continue
+        
+        if not all_embeddings:
+            return jsonify({
+                'success': False,
+                'message': f'No face embeddings extracted from {len(frames)} frames',
+                'enrollment_complete': False
+            })
+        
+        # Compute average embedding
+        if len(all_embeddings) > 1:
+            embeddings_array = np.stack(all_embeddings)
+            average_embedding = np.mean(embeddings_array, axis=0)
+            # Normalize the average embedding
+            average_embedding = average_embedding / np.linalg.norm(average_embedding)
+        else:
+            average_embedding = all_embeddings[0]
+        
+        # Store in room embeddings
+        room_embeddings[room_id] = {
+            'embedding': average_embedding,
+            'metadata': {
+                'enrollment_time': datetime.now().isoformat(),
+                'frames_processed': len(frames),
+                'valid_frames': valid_frames,
+                'embeddings_count': len(all_embeddings)
+            }
+        }
+        
+        print(f"[ENROLLMENT] ✅ Face enrollment complete for room {room_id}")
+        print(f"[ENROLLMENT]    Processed: {valid_frames}/{len(frames)} frames")
+        print(f"[ENROLLMENT]    Embeddings: {len(all_embeddings)} -> 1 average")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Face enrolled successfully from {valid_frames} frames',
+            'enrollment_complete': True,
+            'metadata': room_embeddings[room_id]['metadata']
+        })
+        
+    except Exception as e:
+        print(f"[ENROLLMENT] Face enrollment error: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'Enrollment failed: {str(e)}',
+            'enrollment_complete': False
+        }), 500
+
+@app.route('/room-status/<room_id>', methods=['GET'])
+def get_room_status(room_id: str):
+    """Get enrollment status for a room"""
+    try:
+        if room_id in room_embeddings:
+            metadata = room_embeddings[room_id]['metadata']
+            return jsonify({
+                'enrolled': True,
+                'room_id': room_id,
+                'metadata': metadata
+            })
+        else:
+            return jsonify({
+                'enrolled': False,
+                'room_id': room_id
+            })
+            
+    except Exception as e:
+        return jsonify({
+            'error': f'Status check failed: {str(e)}'
+        }), 500
+
+@app.route('/cleanup-room/<room_id>', methods=['DELETE'])
+def cleanup_room(room_id: str):
+    """Clean up enrollment data for a room"""
+    try:
+        if room_id in room_embeddings:
+            del room_embeddings[room_id]
+            print(f"[ENROLLMENT] Cleaned up enrollment data for room: {room_id}")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Room {room_id} cleaned up'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Cleanup failed: {str(e)}'
+        }), 500
+
+@app.route('/transfer-embedding', methods=['POST'])
+def transfer_embedding():
+    """Transfer face embedding from enrollment room to streaming room."""
+    global room_embeddings
+    
+    try:
+        data = request.get_json()
+        if not data or 'from_room_id' not in data or 'to_room_id' not in data:
+            return jsonify({"error": "Missing room IDs"}), 400
+        
+        from_room_id = data['from_room_id']
+        to_room_id = data['to_room_id']
+        
+        if from_room_id not in room_embeddings:
+            return jsonify({"error": f"Source room {from_room_id} has no embedding"}), 404
+        
+        # Copy embedding to new room
+        room_embeddings[to_room_id] = room_embeddings[from_room_id].copy()
+        print(f"[API] 🔄 Transferred embedding from room {from_room_id} to room {to_room_id}")
+        print(f"[API] 🔄 Available rooms after transfer: {list(room_embeddings.keys())}")
+        
+        return jsonify({
+            "success": True,
+            "message": f"Embedding transferred from {from_room_id} to {to_room_id}"
+        })
+        
+    except Exception as e:
+        print(f"[API] ❌ Transfer embedding error: {e}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':

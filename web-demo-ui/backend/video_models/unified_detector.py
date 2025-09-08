@@ -221,6 +221,26 @@ class UnifiedBlurDetector:
                 info[name] = model.get_model_info()
         
         return info
+    
+    def update_face_embedding(self, embedding: np.ndarray) -> bool:
+        """
+        Update the face detector's dynamic embedding for whitelisting.
+        
+        Args:
+            embedding: Face embedding to use for whitelisting
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if "face" in self.models:
+            try:
+                return self.models["face"].set_dynamic_embedding(embedding)
+            except Exception as e:
+                print(f"[UnifiedDetector][ERROR] Failed to update face embedding: {e}")
+                return False
+        else:
+            print("[UnifiedDetector][WARN] Face detector not available for embedding update")
+            return False
 
 
 def demo_unified_detector():

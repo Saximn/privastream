@@ -561,7 +561,8 @@ io.on('connection', socket => {
                   frame: frame, // Host already sends full data:image/jpeg;base64, URL
                   detect_only: true,
                   frame_id: state.frameCount,
-                  timestamp: timestamp || Date.now()  // Add timestamp for request age validation
+                  timestamp: timestamp || Date.now(),  // Add timestamp for request age validation
+                  room_id: roomId  // Pass the room ID for whitelist lookup
                 }),
                 timeout: 5000
               });

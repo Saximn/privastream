@@ -39,13 +39,47 @@ export default function Host() {
         console.log('[DEBUG] Connected to backend signaling socket')
 
         setConnectionState('creating room...')
-        const response = await socketRef.current.createRoom()
-        console.log('[DEBUG] Room created:', response)
-        setRoomId(response.roomId)
+        
+        // Create mediasoup room
+        const roomResponse = await socketRef.current.createRoom()
+        console.log('[DEBUG] Room created:', roomResponse)
+        setRoomId(roomResponse.roomId)
+        
+        // Check if we have enrollment data and associate it with the new room
+        const enrolledRoomId = sessionStorage.getItem('enrolledRoomId')
+        if (enrolledRoomId) {
+          console.log('[DEBUG] 🎯 Transferring enrolled face data from room:', enrolledRoomId, 'to mediasoup room:', roomResponse.roomId)
+          
+          // Transfer enrollment data from enrolledRoomId to actual roomId
+          try {
+            const transferResponse = await fetch('http://localhost:5001/transfer-embedding', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                from_room_id: enrolledRoomId,
+                to_room_id: roomResponse.roomId
+              })
+            })
+            
+            const transferResult = await transferResponse.json()
+            if (transferResult.success) {
+              console.log('[DEBUG] ✅ Successfully transferred face embedding to streaming room')
+              sessionStorage.setItem('mediasoupRoomId', roomResponse.roomId)
+            } else {
+              console.warn('[DEBUG] ⚠️ Failed to transfer face embedding:', transferResult.error)
+            }
+          } catch (error) {
+            console.error('[DEBUG] ❌ Error transferring face embedding:', error)
+          }
+        } else {
+          console.log('[DEBUG] ⚠️ No face enrollment found - proceeding without face recognition')
+        }
 
         // SFU socket
         setConnectionState('connecting to mediasoup...')
-        const sfuUrl = response.mediasoupUrl || 'http://localhost:3001'
+        const sfuUrl = roomResponse.mediasoupUrl || 'http://localhost:3001'
         sfuSocketRef.current = io(sfuUrl, { transports: ['websocket'], reconnectionAttempts: 3 })
 
         await new Promise<void>((resolve, reject) => {
@@ -58,7 +92,7 @@ export default function Host() {
         try {
           setConnectionState('initializing mediasoup client...')
           console.log('[DEBUG] Initializing Mediasoup client...')
-          mediasoupClientRef.current = new MediasoupClient(response.roomId)
+          mediasoupClientRef.current = new MediasoupClient(roomResponse.roomId)
           await mediasoupClientRef.current.initialize(sfuSocketRef.current!)
           console.log('[DEBUG] Mediasoup client initialized')
         } catch(err) {
@@ -70,7 +104,7 @@ try {
   console.log('[DEBUG] Creating SFU room via socket emit...')
   await new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('SFU room creation timeout')), 5000)
-    sfuSocketRef.current!.emit('create-room', { roomId: response.roomId }, (sfuResponse: any) => {
+    sfuSocketRef.current!.emit('create-room', { roomId: roomResponse.roomId }, (sfuResponse: any) => {
       clearTimeout(timeout)
       console.log('[DEBUG] SFU create-room callback fired', sfuResponse)
       if (sfuResponse.success) resolve()

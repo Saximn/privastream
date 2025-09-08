@@ -8,7 +8,7 @@ export default function Home() {
   const router = useRouter()
 
   const createRoom = () => {
-    router.push('/host')
+    router.push('/enrollment')
   }
 
   const joinRoom = () => {

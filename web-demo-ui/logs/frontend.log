@@ -1,0 +1,22 @@
+
+> livestream-frontend@0.1.0 dev
+> next dev
+
+  ▲ Next.js 14.2.32
+  - Local:        http://localhost:3000
+  - Experiments (use with caution):
+    · turbo
+
+ ✓ Starting...
+ ✓ Ready in 6.1s
+ ○ Compiling / ...
+ ✓ Compiled / in 7.6s (461 modules)
+ GET / 200 in 8068ms
+ ✓ Compiled in 171ms (238 modules)
+ ✓ Compiled /enrollment in 265ms (453 modules)
+ ○ Compiling /host ...
+ ✓ Compiled /host in 561ms (708 modules)
+ GET / 200 in 92ms
+ ✓ Compiled /viewer/[roomId] in 400ms (714 modules)
+ GET /viewer/a489a6c0 200 in 1022ms
+^C^C
