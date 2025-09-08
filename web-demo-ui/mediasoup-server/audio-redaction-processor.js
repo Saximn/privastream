@@ -18,8 +18,8 @@ class AudioRedactionProcessor {
     this.pcmBuffer = Buffer.alloc(0);
     this.processedProducers = new Map();
     
-    // Sliding window: store previous chunks per room for overlap processing
-    this.previousChunks = new Map(); // roomId -> previous 3-second chunk
+    // Sliding window: store previous chunks per room for context processing
+    this.previousChunks = new Map(); // roomId -> previous 3-second chunk (context only)
     
     console.log('[AUDIO-REDACTION-PROCESSOR] Initialized:', {
       bufferSize: this.bufferSize,
@@ -147,13 +147,17 @@ class AudioRedactionProcessor {
         
         let outputBuffer;
         if (isFirstChunk) {
-          // First chunk: return entire processed buffer
+          // First chunk: return entire processed buffer (no previous context)
           outputBuffer = fullProcessedBuffer;
         } else {
-          // Subsequent chunks: extract only the new portion (second half)
+          // Subsequent chunks: we sent [previous + current] but only want to output the current part
+          // The API processed the combined audio, but we only output the second half (current chunk)
           const halfLength = Math.floor(fullProcessedBuffer.length / 2);
-          outputBuffer = fullProcessedBuffer.slice(halfLength);
-          console.log(`[AUDIO-REDACTION-PROCESSOR] Sliding window: extracted new portion ${outputBuffer.length}/${fullProcessedBuffer.length} bytes`);
+          outputBuffer = Buffer.from(fullProcessedBuffer.slice(halfLength));
+          
+          console.log(`[AUDIO-REDACTION-PROCESSOR] Context-only sliding window: extracted current chunk ${outputBuffer.length}/${fullProcessedBuffer.length} bytes`);
+          console.log(`[AUDIO-REDACTION-PROCESSOR] Previous 3s used for context only - not modifying already-output audio`);
+          console.log(`[AUDIO-REDACTION-PROCESSOR] PII detected: ${result.pii_count} regions, transcript: "${result.transcript?.substring(0, 50)}..."`);
         }
         
         console.log('[AUDIO-REDACTION-PROCESSOR] Audio processed successfully:', {
@@ -275,7 +279,7 @@ class AudioRedactionProcessor {
       // Clean up sliding window data for this room
       if (this.previousChunks.has(roomId)) {
         this.previousChunks.delete(roomId);
-        console.log('[AUDIO-REDACTION-PROCESSOR] Cleared previous chunk for room:', roomId);
+        console.log('[AUDIO-REDACTION-PROCESSOR] Cleared previous chunk context for room:', roomId);
       }
       
       // Reset buffer for this room (in a real implementation, you'd have per-room buffers)

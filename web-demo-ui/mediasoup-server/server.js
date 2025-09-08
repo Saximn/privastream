@@ -373,19 +373,16 @@ io.on('connection', socket => {
             transcript: result.metadata?.transcript ? result.metadata.transcript.substring(0, 50) + '...' : 'empty'
           });
           
-          // SLIDING WINDOW FIX: Account for the fact that sliding window output represents
-          // audio from 3 seconds earlier (we output the second half of [previous + current])
-          // So we need to reduce the delay by 3 seconds to maintain sync with video
-          const slidingWindowOffset = result.metadata?.hadPreviousChunk ? 3000 : 0;
-          const effectiveChunkStartTime = chunkStartTime - slidingWindowOffset;
+          // CONTEXT-ONLY SLIDING WINDOW: Previous chunk is used only for ASR context,
+          // current chunk timing is unaffected since we only output the current portion
+          const effectiveChunkStartTime = chunkStartTime;
           
-          // Calculate delay based on effective chunk start time to achieve 8 seconds total
-          const targetOutputTime = effectiveChunkStartTime + 8000; // 8 seconds from effective start
+          // Calculate delay to achieve 8 seconds total (5s buffer + 3s processing)
+          const targetOutputTime = effectiveChunkStartTime + 8000;
           const delayNeeded = Math.max(0, targetOutputTime - Date.now());
           
-          console.log('[AUDIO-SERVER] 🕐 Sliding window timing adjustment:', {
-            originalChunkStart: chunkStartTime,
-            slidingWindowOffset: slidingWindowOffset,
+          console.log('[AUDIO-SERVER] 🕐 Context-only sliding window timing:', {
+            chunkStartTime: chunkStartTime,
             effectiveChunkStart: effectiveChunkStartTime,
             delayNeeded: delayNeeded
           });
