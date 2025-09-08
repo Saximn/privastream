@@ -1,0 +1,35 @@
+# Audio Redaction Server with Faster-Whisper Requirements
+
+# Core Flask API
+flask==2.3.2
+flask-cors==4.0.0
+
+# Audio processing
+librosa==0.10.1
+soundfile==0.12.1
+numpy==1.24.3
+
+# Faster-Whisper (much faster than transformers whisper)
+faster-whisper==1.0.0
+
+# NLP for PII detection
+transformers==4.33.2
+torch==2.0.1
+torchaudio==2.0.2
+
+# NER model dependencies
+datasets==2.14.4
+
+# Utilities
+python-dateutil==2.8.2
+
+# Optional: CUDA support (install PyTorch with CUDA if you have GPU)
+# Visit https://pytorch.org/get-started/locally/ for CUDA-specific torch installation
+
+# Note: faster-whisper requires:
+# - CUDA toolkit if using GPU (recommended)
+# - Or CPU-only mode (slower but still faster than transformers whisper)
+#
+# For best performance on GPU:
+# pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
+# pip install faster-whisper
