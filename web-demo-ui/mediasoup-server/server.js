@@ -585,28 +585,11 @@ io.on('connection', socket => {
                 }, delayNeeded); // Dynamic delay to achieve 8 seconds total from capture
               } else {
                 console.log('[VIDEO-SERVER] ❌ Python service error:', response.status);
+                console.log('[VIDEO-SERVER] 🔒 PRIVACY PROTECTION: Dropping frame instead of sending unprocessed video');
                 
-                // Calculate delay for fallback frame based on capture time
-                const captureTime = timestamp || Date.now();
-                const targetOutputTime = captureTime + 8000; // 8 seconds from when media was captured
-                const currentTime = Date.now();
-                const delayNeeded = Math.max(0, targetOutputTime - currentTime);
-                
-                setTimeout(() => {
-                  const room = rooms.get(roomId);
-                  if (room && room.viewers.size > 0) {
-                    room.viewers.forEach(viewerId => {
-                      io.to(viewerId).emit('processed-video-frame', {
-                        frame: frame, // Already has data:image/jpeg;base64, prefix
-                        frameId: frameId,
-                        boundingBoxCount: 0,
-                        wasDetectionFrame: false,
-                        timestamp: timestamp
-                      });
-                    });
-                    console.log('[VIDEO-SERVER] 📤 Sent fallback frame with', delayNeeded, 'ms delay (8s total from capture) to', room.viewers.size, 'viewers');
-                  }
-                }, delayNeeded); // Dynamic delay to achieve 8 seconds total from capture
+                // PRIVACY FIX: Drop the frame entirely instead of sending unprocessed video
+                // This ensures viewers NEVER see raw/unprocessed content
+                // Better to have gaps in video than to leak private information
               }
               
             } catch (error) {

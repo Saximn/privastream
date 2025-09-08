@@ -96,6 +96,11 @@ class WebRTCVideoProcessor extends EventEmitter {
         // Apply blur to current frame using interpolated boxes
         if (interpolatedBoxes && interpolatedBoxes.length > 0) {
           const blurredFrame = await this.applyBlurToFrame(frameBase64, interpolatedBoxes);
+          // PRIVACY FIX: Check if blur failed and drop frame if needed
+          if (blurredFrame === null) {
+            console.log('[WEBRTC-VIDEO-PROCESSOR] 🔒 PRIVACY PROTECTION: Blur failed - dropping interpolated frame');
+            return null;
+          }
           return {
             processedFrame: blurredFrame,
             boundingBoxes: interpolatedBoxes,
@@ -104,20 +109,15 @@ class WebRTCVideoProcessor extends EventEmitter {
         }
       }
       
-      // Return original frame if no processing needed
-      return {
-        processedFrame: frameBase64,
-        boundingBoxes: [],
-        wasDetectionFrame: false
-      };
+      // PRIVACY FIX: Return null if no processing needed to force frame dropping
+      console.log('[WEBRTC-VIDEO-PROCESSOR] 🔒 PRIVACY PROTECTION: No processing available - dropping frame');
+      return null;
       
     } catch (error) {
       console.error('[WEBRTC-VIDEO-PROCESSOR] ❌ Frame processing error:', error);
-      return {
-        processedFrame: frameBase64,
-        boundingBoxes: [],
-        wasDetectionFrame: false
-      };
+      console.log('[WEBRTC-VIDEO-PROCESSOR] 🔒 PRIVACY PROTECTION: Error occurred - dropping frame');
+      // PRIVACY FIX: Return null instead of original frame to prevent privacy leaks
+      return null;
     }
   }
   
@@ -186,12 +186,16 @@ class WebRTCVideoProcessor extends EventEmitter {
         return result.frame;
       } else {
         console.error('[WEBRTC-VIDEO-PROCESSOR] ❌ Blur service error:', response.status);
-        return frameB64; // Return original on error
+        console.log('[WEBRTC-VIDEO-PROCESSOR] 🔒 PRIVACY PROTECTION: Blur service failed - dropping frame');
+        // PRIVACY FIX: Return null instead of original frame to prevent privacy leaks
+        return null;
       }
       
     } catch (error) {
       console.error('[WEBRTC-VIDEO-PROCESSOR] ❌ Blur error:', error);
-      return frameB64; // Return original on error
+      console.log('[WEBRTC-VIDEO-PROCESSOR] 🔒 PRIVACY PROTECTION: Blur failed - dropping frame');
+      // PRIVACY FIX: Return null instead of original frame to prevent privacy leaks
+      return null;
     }
   }
   

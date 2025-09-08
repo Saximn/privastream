@@ -49,7 +49,7 @@ class FaceDetector:
         
         # Initialize face analysis model
         self.ctx_id = self._pick_ctx_id(gpu_id)
-        self.app = FaceAnalysis(name="buffalo_l")
+        self.app = FaceAnalysis(name="buffalo_s")
         self.app.prepare(ctx_id=self.ctx_id, det_size=(det_size, det_size))
         
         # Temporal tracking
