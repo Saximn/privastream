@@ -1,21 +1,21 @@
-'use client'
+"use client";
 
-import { useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 
 export default function Home() {
-  const [roomId, setRoomId] = useState('')
-  const router = useRouter()
+  const [roomId, setRoomId] = useState("");
+  const router = useRouter();
 
   const createRoom = () => {
-    router.push('/enrollment')
-  }
+    router.push("/enrollment");
+  };
 
   const joinRoom = () => {
     if (roomId.trim()) {
-      router.push(`/viewer/${roomId}`)
+      router.push(`/viewer/${roomId}`);
     }
-  }
+  };
 
   return (
     <div className="min-h-screen bg-gray-900 flex items-center justify-center">
@@ -23,7 +23,7 @@ export default function Home() {
         <h1 className="text-3xl font-bold text-center mb-8 text-gray-800">
           Live Stream App
         </h1>
-        
+
         <div className="space-y-6">
           <div>
             <button
@@ -33,9 +33,9 @@ export default function Home() {
               Start Streaming
             </button>
           </div>
-          
+
           <div className="text-center text-gray-500">or</div>
-          
+
           <div className="space-y-3">
             <input
               type="text"
@@ -54,5 +54,5 @@ export default function Home() {
         </div>
       </div>
     </div>
-  )
+  );
 }
