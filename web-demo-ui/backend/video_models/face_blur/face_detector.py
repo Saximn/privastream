@@ -22,7 +22,7 @@ class FaceDetector:
                  embed_path: str = "whitelist/creator_embedding.json",
                  gpu_id: int = 0,
                  det_size: int = 960,
-                 threshold: float = 0.35,
+                 threshold: float = 0.45,  # More lenient threshold for better matching
                  dilate_px: int = 12,
                  smooth_ms: int = 300,
                  lowlight_trigger: float = 60.0):
@@ -54,7 +54,7 @@ class FaceDetector:
         
         # Temporal tracking
         self.masks = []  # (expiry_time, box)
-        self.vote_buf = deque(maxlen=3)  # temporal vote for whitelist decision
+        self.vote_buf = deque(maxlen=5)  # temporal vote for whitelist decision (longer buffer for stability)
         self.panic_mode = False
         
         print(f"[FaceDetector] Initialized with ctx_id={self.ctx_id}")
@@ -102,7 +102,9 @@ class FaceDetector:
         try:
             if embedding is not None and len(embedding) > 0:
                 self.creator_embedding = np.array(embedding, dtype=float)
-                print("[FaceDetector] Set dynamic embedding from memory.")
+                print(f"[FaceDetector] ✅ Set dynamic embedding from memory (shape: {self.creator_embedding.shape})")
+                # Reset vote buffer when embedding changes
+                self.vote_buf.clear()
                 return True
             else:
                 print("[FaceDetector][WARN] Invalid embedding provided.")
@@ -215,35 +217,105 @@ class FaceDetector:
             # Blur entire frame in panic mode
             new_boxes.append([0, 0, W - 1, H - 1])
         else:
-            # Run detection on specified cadence
-            if frame_id % max(1, stride) == 0:
-                if tta_every > 0 and frame_id % tta_every == 0:
-                    # Use TTA
-                    face_boxes = self.detect_faces_tta(frame_for_det, big_size=960, do_flip=True)
-                    faces = []  # TTA only returns boxes
-                else:
-                    # Regular detection
-                    faces = self.app.get(frame_for_det)
-                    face_boxes = [list(map(float, f.bbox)) for f in faces]
+            # Always run face detection, but only run expensive embedding comparison on stride intervals
+            if tta_every > 0 and frame_id % tta_every == 0 and self.creator_embedding is None:
+                # Use TTA only when no whitelist is needed and TTA is enabled
+                face_boxes = self.detect_faces_tta(frame_for_det, big_size=960, do_flip=True)
+                faces = []  # TTA only returns boxes
+            else:
+                # Regular detection (always when we have creator embedding)
+                faces = self.app.get(frame_for_det)
+                face_boxes = [list(map(float, f.bbox)) for f in faces]
+            
+            # Log detection results
+            if self.creator_embedding is not None:
+                print(f"[FaceDetector] Detected {len(face_boxes)} faces, {len(faces)} face objects, whitelist available: YES")
+            else:
+                print(f"[FaceDetector] Detected {len(face_boxes)} faces, no whitelist available - will blur all")
+            
+            # Find which faces (if any) match the creator by checking only the 3 largest faces
+            # Always run embedding comparison when faces are detected (no caching/stride optimization)
+            creator_matches = set()  # Indices of faces that match creator
+            
+            if self.creator_embedding is not None and len(faces) > 0:
+                # Get the 3 largest faces for whitelist checking only
+                face_areas = []
+                for i, (face, box) in enumerate(zip(faces, face_boxes)):
+                    x1, y1, x2, y2 = box
+                    area = (x2 - x1) * (y2 - y1)
+                    face_areas.append((area, i, face, box))
                 
-                # Decide per face: blur unless it's the creator
-                for i, box in enumerate(face_boxes):
+                # Sort by area (largest first) and take top 3
+                face_areas.sort(reverse=True)
+                top_faces = face_areas[:3]
+                
+                print(f"[FaceDetector] Processing {len(top_faces)} largest faces for creator matching (out of {len(faces)} total)...")
+                
+                for area, i, face, box in top_faces:
+                    try:
+                        # Check if face has embedding
+                        if not hasattr(face, 'normed_embedding'):
+                            print(f"[FaceDetector] Face {i} has no normed_embedding attribute")
+                            continue
+                            
+                        if face.normed_embedding is None:
+                            print(f"[FaceDetector] Face {i} has None embedding")
+                            continue
+                            
+                        # Validate embedding shape
+                        if len(face.normed_embedding.shape) != 1 or face.normed_embedding.shape[0] == 0:
+                            print(f"[FaceDetector] Face {i} has invalid embedding shape: {face.normed_embedding.shape}")
+                            continue
+                        
+                        # Calculate distance
+                        distance = self.cosine_distance(self.creator_embedding, face.normed_embedding)
+                        match = distance <= self.threshold
+                        
+                        if match:
+                            creator_matches.add(i)
+                            print(f"[FaceDetector] Face {i} MATCHES creator (distance: {distance:.3f}, area: {area:.0f})")
+                        else:
+                            print(f"[FaceDetector] Face {i} does NOT match (distance: {distance:.3f}, area: {area:.0f})")
+                            
+                    except Exception as e:
+                        print(f"[FaceDetector] Error processing face {i}: {e}")
+                        continue
+                
+                # Update temporal voting with whether ANY face matched
+                any_match = len(creator_matches) > 0
+                self.vote_buf.append(any_match)
+                
+                # More stable voting: allow creator if at least 2 out of last 5 frames had a match
+                # Special case: if we have fewer than 3 frames, be more lenient (50% threshold)
+                vote_count = sum(self.vote_buf)
+                buffer_size = len(self.vote_buf)
+                
+                if buffer_size < 3:
+                    # Be more lenient for initial frames: require at least 50% matches
+                    creator_allowed = vote_count >= max(1, buffer_size // 2)
+                else:
+                    # Standard voting: require at least 2 out of 5 frames
+                    creator_allowed = vote_count >= 2
+                
+                print(f"[FaceDetector] Temporal voting: {vote_count}/{buffer_size} frames matched, threshold: {'lenient' if buffer_size < 3 else 'standard'}")
+                
+                print(f"[FaceDetector] Creator matches: {creator_matches}, allowed: {creator_allowed}")
+            else:
+                creator_allowed = False
+                print(f"[FaceDetector] No creator embedding or no face embeddings available")
+                
+            # Decide per face: blur unless it's the creator
+            for i, box in enumerate(face_boxes):
+                # Simple logic: if creator is allowed and this face matches creator, don't blur
+                if creator_allowed and i in creator_matches:
+                    should_blur = False
+                    print(f"[FaceDetector] Face {i} whitelisted (creator match)")
+                else:
                     should_blur = True
-                    
-                    if (self.creator_embedding is not None and 
-                        i < len(faces) and 
-                        hasattr(faces[i], 'normed_embedding') and
-                        faces[i].normed_embedding is not None):
-                        
-                        # Check if face matches creator
-                        distance = self.cosine_distance(self.creator_embedding, faces[i].normed_embedding)
-                        self.vote_buf.append(distance <= self.threshold)
-                        
-                        # Simple temporal voting: allow if majority of recent frames match
-                        should_blur = sum(self.vote_buf) < 2
-                    
-                    if should_blur:
-                        new_boxes.append(self.dilate_box(box, W, H))
+                    print(f"[FaceDetector] Face {i} will be blurred")
+                
+                if should_blur:
+                    new_boxes.append(self.dilate_box(box, W, H))
         
         # Temporal smoothing: update mask list
         expiry = now + self.smooth_ms / 1000.0
@@ -251,6 +323,9 @@ class FaceDetector:
         
         # Return all active masks as rectangles
         rectangles = [box for _, box in self.masks]
+        
+        # Debug logging
+        print(f"[FaceDetector] Frame {frame_id}: new_boxes={len(new_boxes)}, active_masks={len(rectangles)}")
         
         return frame_id, rectangles
     

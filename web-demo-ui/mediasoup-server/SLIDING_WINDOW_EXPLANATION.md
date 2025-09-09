@@ -83,15 +83,15 @@ With sliding window, the output audio represents content from 3 seconds earlier:
 const slidingWindowOffset = result.metadata?.hadPreviousChunk ? 3000 : 0;
 const effectiveChunkStartTime = chunkStartTime - slidingWindowOffset;
 
-// Maintain 8-second total delay with corrected timing
-const targetOutputTime = effectiveChunkStartTime + 8000;
+// Maintain total delay with corrected timing (configurable via PROCESSING_DELAY_MS)
+const targetOutputTime = effectiveChunkStartTime + PROCESSING_DELAY_MS;
 const delayNeeded = Math.max(0, targetOutputTime - Date.now());
 ```
 
 ### How It Works
 - **First chunk**: No offset (hadPreviousChunk = false) → Normal timing
 - **Subsequent chunks**: 3-second offset (hadPreviousChunk = true) → Compensated timing
-- **Result**: Audio and video remain synchronized at 8-second total delay
+- **Result**: Audio and video remain synchronized at configurable total delay (default: 8 seconds)
 
 ## Preserved Functionality
 

@@ -18,6 +18,10 @@ try {
   fetch = null;
 }
 
+// TIMING CONFIGURATION - Easy to adjust
+const PROCESSING_DELAY_MS = 8000; // Total delay in milliseconds (8000ms = 8 seconds)
+console.log(`[CONFIG] Video processing delay set to: ${PROCESSING_DELAY_MS}ms (${PROCESSING_DELAY_MS/1000}s)`);
+
 // Import Audio Redaction Processor
 const { AudioRedactionProcessor } = require('./audio-redaction-processor');
 // Import WebRTC Video Processor
@@ -92,20 +96,20 @@ async function init() {
 }
 
 // Python frame processing
-async function sendToPython(frameB64) {
+async function sendToPython(frameB64, roomId = null) {
   if (fetch) {
     // Use node-fetch
     const res = await fetch('http://localhost:5001/process-frame', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ frame: frameB64 })
+      body: JSON.stringify({ frame: frameB64, room_id: roomId })
     });
     const data = await res.json();
     return data.frame;
   } else {
     // Fallback to http module
     return new Promise((resolve, reject) => {
-      const postData = JSON.stringify({ frame: frameB64 });
+      const postData = JSON.stringify({ frame: frameB64, room_id: roomId });
       const options = {
         hostname: 'localhost',
         port: 5001,
@@ -138,12 +142,12 @@ async function sendToPython(frameB64) {
 }
 
 // Send frame to Python for detection only (using existing process-frame endpoint)
-async function sendToPythonForDetection(frameB64) {
+async function sendToPythonForDetection(frameB64, roomId = null) {
   if (fetch) {
     const res = await fetch('http://localhost:5001/process-frame', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ frame: frameB64, detect_only: true })
+      body: JSON.stringify({ frame: frameB64, detect_only: true, room_id: roomId })
     });
     const data = await res.json();
     return {
@@ -154,7 +158,7 @@ async function sendToPythonForDetection(frameB64) {
     };
   } else {
     return new Promise((resolve, reject) => {
-      const postData = JSON.stringify({ frame: frameB64, detect_only: true });
+      const postData = JSON.stringify({ frame: frameB64, detect_only: true, room_id: roomId });
       const options = {
         hostname: 'localhost',
         port: 5001,
@@ -222,14 +226,14 @@ function interpolateBoundingBoxes(originalBoxes, framesSinceDetection) {
 }
 
 // Apply blur to frame using OpenCV/Python without GPU processing
-async function applyBlurToFrame(frameB64, boundingBoxes) {
+async function applyBlurToFrame(frameB64, boundingBoxes, roomId = null) {
   if (!boundingBoxes || boundingBoxes.length === 0) {
     return frameB64; // No blur needed
   }
   
   try {
     // Call Python script for CPU-only blur using cv2
-    const blurredFrame = await callPythonBlur(frameB64, boundingBoxes);
+    const blurredFrame = await callPythonBlur(frameB64, boundingBoxes, roomId);
     return blurredFrame;
   } catch (error) {
     console.error('[SERVER] CPU blur failed:', error);
@@ -238,7 +242,7 @@ async function applyBlurToFrame(frameB64, boundingBoxes) {
 }
 
 // Call Python script for CPU-only blur
-async function callPythonBlur(frameB64, boundingBoxes) {
+async function callPythonBlur(frameB64, boundingBoxes, roomId = null) {
   if (fetch) {
     // Use existing endpoint with blur_only flag
     const res = await fetch('http://localhost:5001/process-frame', {
@@ -248,7 +252,8 @@ async function callPythonBlur(frameB64, boundingBoxes) {
         frame: frameB64, 
         blur_only: true,
         rectangles: boundingBoxes,
-        polygons: [] // Only using rectangles for interpolated frames
+        polygons: [], // Only using rectangles for interpolated frames
+        room_id: roomId
       })
     });
     const data = await res.json();
@@ -260,7 +265,8 @@ async function callPythonBlur(frameB64, boundingBoxes) {
         frame: frameB64, 
         blur_only: true,
         rectangles: boundingBoxes,
-        polygons: []
+        polygons: [],
+        room_id: roomId
       });
       const options = {
         hostname: 'localhost',
@@ -295,7 +301,7 @@ async function callPythonBlur(frameB64, boundingBoxes) {
 
 // Handle video frames and buffering (legacy - kept for compatibility)
 async function handleVideoFrame(roomId, frameB64) {
-  const blurredFrame = await sendToPython(frameB64);
+  const blurredFrame = await sendToPython(frameB64, roomId);
   if (!frameBuffer.has(roomId)) frameBuffer.set(roomId, []);
   frameBuffer.get(roomId).push({ frame: blurredFrame, timestamp: Date.now() });
 
@@ -377,8 +383,8 @@ io.on('connection', socket => {
           // current chunk timing is unaffected since we only output the current portion
           const effectiveChunkStartTime = chunkStartTime;
           
-          // Calculate delay to achieve 8 seconds total (5s buffer + 3s processing)
-          const targetOutputTime = effectiveChunkStartTime + 8000;
+          // Calculate delay to achieve total processing delay (5s buffer + 3s processing)
+          const targetOutputTime = effectiveChunkStartTime + PROCESSING_DELAY_MS;
           const delayNeeded = Math.max(0, targetOutputTime - Date.now());
           
           console.log('[AUDIO-SERVER] 🕐 Context-only sliding window timing:', {
@@ -581,9 +587,9 @@ io.on('connection', socket => {
                   frame: result.frame ? 'received' : 'missing'
                 });
                 
-                // Calculate delay based on capture time to achieve 8 seconds total from capture
+                // Calculate delay based on capture time to achieve total processing delay from capture
                 const captureTime = timestamp || Date.now();
-                const targetOutputTime = captureTime + 8000; // 8 seconds from when media was captured
+                const targetOutputTime = captureTime + PROCESSING_DELAY_MS; // Total delay from when media was captured
                 const currentTime = Date.now();
                 const delayNeeded = Math.max(0, targetOutputTime - currentTime);
                 

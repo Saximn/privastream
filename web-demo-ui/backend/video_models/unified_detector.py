@@ -103,7 +103,7 @@ class UnifiedBlurDetector:
         
         print(f"[UnifiedDetector] Initialized with {len(self.models)} models: {list(self.models.keys())}")
     
-    def process_frame(self, frame: np.ndarray, frame_id: int) -> Dict[str, Any]:
+    def process_frame(self, frame: np.ndarray, frame_id: int, stride: int = 1, tta_every: int = 0) -> Dict[str, Any]:
         """
         Process a frame with all enabled models.
         
@@ -123,7 +123,7 @@ class UnifiedBlurDetector:
         # Process with face detector
         if "face" in self.models:
             try:
-                face_frame_id, face_rectangles = self.models["face"].process_frame(frame, frame_id)
+                face_frame_id, face_rectangles = self.models["face"].process_frame(frame, frame_id, stride, tta_every)
                 results["models"]["face"] = {
                     "frame_id": face_frame_id,
                     "rectangles": face_rectangles,

@@ -31,9 +31,18 @@ except ImportError:
 app = Flask(__name__)
 CORS(app, origins="*")
 
+# PERFORMANCE CONFIGURATION - Easy to adjust
+DETECTION_FPS = 4.0  # FPS for face/privacy detection (lower = less latency, higher = more CPU load)
+# Conversion: 30fps input -> stride calculation
+DETECTION_STRIDE = max(1, int(30 / DETECTION_FPS))  # Process every Nth frame
+
+EXPECTED_DELAY_SEC = DETECTION_STRIDE / 30.0  # Delay in seconds based on 30fps input
+print(f"[CONFIG] Detection FPS: {DETECTION_FPS}, Stride: {DETECTION_STRIDE} (process every {DETECTION_STRIDE} frames)")
+print(f"[CONFIG] Expected detection delay: {EXPECTED_DELAY_SEC:.2f} seconds")
+
 # Detector configuration
 DETECTOR_CONFIG = {
-    "enable_face": True,
+    "enable_face": False,
     "enable_pii": False,
     "enable_plate": False,
     "pii": {
@@ -250,7 +259,7 @@ def filter_frame(frame, frame_id=0, blur_only=False, provided_rectangles=None, r
             print(f"[API] ⚠️  No embedding found for room {room_id} (available: {list(room_embeddings.keys())})")
         
         print(f"[API] Full detection mode: processing frame {frame_id}")
-        results = detector.process_frame(frame, frame_id)
+        results = detector.process_frame(frame, frame_id, stride=DETECTION_STRIDE)
         
         # Extract rectangles from detection results
         for model_name in ["face", "plate", "pii"]:
