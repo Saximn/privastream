@@ -1,16 +1,57 @@
 from flask import Flask, request
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_cors import CORS
+import os
 import uuid
 import requests
+from dotenv import load_dotenv
 
+# Load environment variables
+load_dotenv()
+
+# Environment configuration
+FLASK_HOST = os.getenv('FLASK_HOST', '0.0.0.0')
+FLASK_PORT = int(os.getenv('FLASK_PORT', 5000))
+SECRET_KEY = os.getenv('SECRET_KEY', 'your-secret-key-change-this-in-production')
+SSL_ENABLED = os.getenv('SSL_ENABLED', 'false').lower() == 'true'
+SSL_CERT_PATH = os.getenv('SSL_CERT_PATH', './ssl/cert.pem')
+SSL_KEY_PATH = os.getenv('SSL_KEY_PATH', './ssl/key.pem')
+CORS_ALLOWED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS', '*')
+SOCKETIO_CORS_ALLOWED_ORIGINS = os.getenv('SOCKETIO_CORS_ALLOWED_ORIGINS', '*')
+SOCKETIO_LOGGER = os.getenv('SOCKETIO_LOGGER', 'false').lower() == 'true'
+SOCKETIO_ENGINEIO_LOGGER = os.getenv('SOCKETIO_ENGINEIO_LOGGER', 'false').lower() == 'true'
+
+# Service URLs
+MEDIASOUP_SERVER_URL = os.getenv('MEDIASOUP_SERVER_URL', 'http://localhost:3001')
+VIDEO_SERVICE_URL = os.getenv('VIDEO_SERVICE_URL', 'http://localhost:5001')
+AUDIO_SERVICE_URL = os.getenv('AUDIO_SERVICE_URL', 'http://localhost:5002')
+FACE_ENROLLMENT_API_URL = os.getenv('FACE_ENROLLMENT_API_URL', 'http://localhost:5003')
+
+# Flask app configuration
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'your-secret-key'
-CORS(app, origins="*")
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', logger=True, engineio_logger=True)
+app.config['SECRET_KEY'] = SECRET_KEY
 
-# Configuration for Mediasoup server
-MEDIASOUP_SERVER_URL = 'http://localhost:3001'
+# Configure CORS
+if CORS_ALLOWED_ORIGINS == '*':
+    CORS(app, origins="*")
+else:
+    CORS(app, origins=CORS_ALLOWED_ORIGINS.split(','))
+
+# Configure SocketIO
+socketio = SocketIO(
+    app, 
+    cors_allowed_origins=SOCKETIO_CORS_ALLOWED_ORIGINS, 
+    async_mode='threading', 
+    logger=SOCKETIO_LOGGER, 
+    engineio_logger=SOCKETIO_ENGINEIO_LOGGER
+)
+
+print(f'[CONFIG] Flask server configured:')
+print(f'  Host: {FLASK_HOST}')
+print(f'  Port: {FLASK_PORT}')
+print(f'  SSL Enabled: {SSL_ENABLED}')
+print(f'  CORS Origins: {CORS_ALLOWED_ORIGINS}')
+print(f'  MediaSoup URL: {MEDIASOUP_SERVER_URL}')
 
 rooms = {}
 users = {}
@@ -120,4 +161,25 @@ def handle_get_room_info(data):
         emit('room_info', {'exists': False})
 
 if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+    # SSL context configuration
+    ssl_context = None
+    if SSL_ENABLED:
+        try:
+            import ssl
+            ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+            ssl_context.load_cert_chain(SSL_CERT_PATH, SSL_KEY_PATH)
+            print(f'[SSL] SSL enabled with cert: {SSL_CERT_PATH}')
+        except Exception as e:
+            print(f'[SSL] Failed to load SSL certificates: {e}')
+            print('[SSL] Falling back to HTTP')
+            ssl_context = None
+    
+    # Start server
+    debug_mode = os.getenv('FLASK_ENV', 'production') != 'production'
+    socketio.run(
+        app, 
+        host=FLASK_HOST, 
+        port=FLASK_PORT, 
+        debug=debug_mode,
+        ssl_context=ssl_context
+    )

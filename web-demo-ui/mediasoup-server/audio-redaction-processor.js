@@ -2,10 +2,14 @@
 const fetch = require('node-fetch');
 const { Transform } = require('stream');
 
+// DEBUG CONFIGURATION - Easy to adjust
+const DEBUG_AUDIO = true;  // Set to true to save WAV files for debugging  
+const DISABLE_SLIDING_WINDOW = true;  // TEMPORARILY DISABLED - Test without sliding window to fix crackling
+
 class AudioRedactionProcessor {
   constructor(options = {}) {
     this.options = {
-      redactionServiceUrl: options.redactionServiceUrl || 'http://localhost:5002',
+      redactionServiceUrl: options.redactionServiceUrl || process.env.REDACTION_SERVICE_URL || 'http://localhost:5002',
       sampleRate: 16000, // Changed to 16kHz to match Vosk
       channels: 1,       // Changed to mono
       bufferDurationMs: 3000, // 3 seconds
@@ -21,10 +25,17 @@ class AudioRedactionProcessor {
     // Sliding window: store previous chunks per room for context processing
     this.previousChunks = new Map(); // roomId -> previous 3-second chunk (context only)
     
+    // Debug options
+    this.debugAudio = DEBUG_AUDIO;
+    this.disableSlidingWindow = DISABLE_SLIDING_WINDOW;
+    this.debugCounter = 0;
+    
     console.log('[AUDIO-REDACTION-PROCESSOR] Initialized:', {
       bufferSize: this.bufferSize,
       sampleRate: this.options.sampleRate,
-      channels: this.options.channels
+      channels: this.options.channels,
+      debugAudio: this.debugAudio,
+      disableSlidingWindow: this.disableSlidingWindow
     });
   }
   
@@ -103,12 +114,56 @@ class AudioRedactionProcessor {
   }
   
   /**
+   * Save debug audio sample as WAV file
+   */
+  saveDebugAudio(buffer, label, roomId) {
+    if (!this.debugAudio) return;
+    
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      
+      const debugDir = path.join(__dirname, 'debug-audio');
+      if (!fs.existsSync(debugDir)) {
+        fs.mkdirSync(debugDir, { recursive: true });
+      }
+      
+      const timestamp = Date.now();
+      const filename = `${label}_${roomId}_${timestamp}_${this.debugCounter++}.wav`;
+      const filepath = path.join(debugDir, filename);
+      
+      // Create WAV header for 16kHz mono PCM
+      const wavHeader = Buffer.alloc(44);
+      wavHeader.write('RIFF', 0, 4, 'ascii');
+      wavHeader.writeUInt32LE(36 + buffer.length, 4);
+      wavHeader.write('WAVE', 8, 4, 'ascii');
+      wavHeader.write('fmt ', 12, 4, 'ascii');
+      wavHeader.writeUInt32LE(16, 16); // PCM format chunk size
+      wavHeader.writeUInt16LE(1, 20);  // PCM format
+      wavHeader.writeUInt16LE(1, 22);  // Mono
+      wavHeader.writeUInt32LE(16000, 24); // Sample rate
+      wavHeader.writeUInt32LE(32000, 28); // Byte rate (16000 * 1 * 2)
+      wavHeader.writeUInt16LE(2, 32);     // Block align
+      wavHeader.writeUInt16LE(16, 34);    // Bits per sample
+      wavHeader.write('data', 36, 4, 'ascii');
+      wavHeader.writeUInt32LE(buffer.length, 40);
+      
+      const wavFile = Buffer.concat([wavHeader, buffer]);
+      fs.writeFileSync(filepath, wavFile);
+      
+      console.log(`[AUDIO-DEBUG] Saved ${label}: ${filepath} (${buffer.length} bytes)`);
+    } catch (error) {
+      console.error('[AUDIO-DEBUG] Failed to save debug audio:', error);
+    }
+  }
+  
+  /**
    * Process raw audio buffer through redaction service with sliding window
    */
   async processAudioBufferSlidingWindow(roomId, currentChunk, previousChunk = null) {
     try {
       let processingBuffer;
-      let isFirstChunk = false;
+      let isFirstChunk = (previousChunk === null);  // Fix: properly determine if first chunk
       
       if (previousChunk) {
         // Combine previous + current for sliding window processing
@@ -117,7 +172,6 @@ class AudioRedactionProcessor {
       } else {
         // First chunk - no previous data
         processingBuffer = currentChunk;
-        isFirstChunk = true;
         console.log(`[AUDIO-REDACTION-PROCESSOR] First chunk: processing ${processingBuffer.length} bytes`);
       }
       
@@ -168,6 +222,9 @@ class AudioRedactionProcessor {
           outputSize: outputBuffer.length,
           slidingWindow: !isFirstChunk
         });
+        
+        // Debug: Save processed audio output
+        this.saveDebugAudio(outputBuffer, 'output', roomId);
         
         return {
           success: true,
@@ -228,17 +285,23 @@ class AudioRedactionProcessor {
         const currentChunk = this.pcmBuffer.slice(0, this.bufferSize);
         this.pcmBuffer = this.pcmBuffer.slice(this.bufferSize);
         
-        // Get previous chunk for sliding window
-        const previousChunk = this.previousChunks.get(roomId);
+        // Debug: Save input audio
+        this.saveDebugAudio(currentChunk, 'input', roomId);
+        
+        // Get previous chunk for sliding window (unless disabled)
+        const previousChunk = this.disableSlidingWindow ? null : this.previousChunks.get(roomId);
         
         console.log('[AUDIO-REDACTION-PROCESSOR] Processing 3-second audio chunk for room:', roomId);
         console.log('[AUDIO-REDACTION-PROCESSOR] Current chunk:', currentChunk.length, 'bytes, Previous chunk:', previousChunk ? previousChunk.length : 0, 'bytes');
+        console.log('[AUDIO-REDACTION-PROCESSOR] Sliding window:', this.disableSlidingWindow ? 'DISABLED' : 'ENABLED');
         
-        // Process with sliding window
+        // Process with sliding window (or without if disabled)
         const result = await this.processAudioBufferSlidingWindow(roomId, currentChunk, previousChunk);
         
-        // Store current chunk as previous for next iteration
-        this.previousChunks.set(roomId, currentChunk);
+        // Store current chunk as previous for next iteration (unless sliding window disabled)
+        if (!this.disableSlidingWindow) {
+          this.previousChunks.set(roomId, currentChunk);
+        }
         
         if (result.success) {
           console.log('[AUDIO-REDACTION-PROCESSOR] Sliding window audio processed successfully:', {

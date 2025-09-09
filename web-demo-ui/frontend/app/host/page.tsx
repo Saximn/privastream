@@ -60,7 +60,7 @@ export default function Host() {
           // Transfer enrollment data from enrolledRoomId to actual roomId
           try {
             const transferResponse = await fetch(
-              "http://localhost:5001/transfer-embedding",
+              `${process.env.NEXT_PUBLIC_VIDEO_SERVICE_URL || "http://localhost:5001"}/transfer-embedding`,
               {
                 method: "POST",
                 headers: {
@@ -99,7 +99,7 @@ export default function Host() {
 
         // SFU socket
         setConnectionState("connecting to mediasoup...");
-        const sfuUrl = roomResponse.mediasoupUrl || "http://localhost:3001";
+        const sfuUrl = roomResponse.mediasoupUrl || process.env.NEXT_PUBLIC_MEDIASOUP_URL || "http://localhost:3001";
         sfuSocketRef.current = io(sfuUrl, {
           transports: ["websocket"],
           reconnectionAttempts: 3,

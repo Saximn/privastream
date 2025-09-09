@@ -33,7 +33,7 @@ export class SocketManager {
   private socket: Socket
   private serverUrl: string
 
-  constructor(serverUrl = 'http://localhost:5000') {
+  constructor(serverUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000') {
     this.serverUrl = serverUrl
     this.socket = io(serverUrl)
   }

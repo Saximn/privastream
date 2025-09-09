@@ -1,0 +1,156 @@
+version: '3.8'
+
+services:
+  # Backend Flask + Socket.IO Server (Internal only)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:5000:5000"  # Only bind to localhost
+    environment:
+      - FLASK_HOST=0.0.0.0
+      - FLASK_PORT=5000
+      - FLASK_ENV=production
+      - SECRET_KEY=${SECRET_KEY}
+      - SSL_ENABLED=false  # Nginx handles SSL
+      - MEDIASOUP_SERVER_URL=http://mediasoup:3001
+      - VIDEO_SERVICE_URL=http://video-service:5001
+      - AUDIO_SERVICE_URL=http://audio-service:5002
+      - FACE_ENROLLMENT_API_URL=http://face-enrollment:5003
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS}
+      - SOCKETIO_CORS_ALLOWED_ORIGINS=${SOCKETIO_CORS_ALLOWED_ORIGINS}
+    networks:
+      - app-network
+    depends_on:
+      - mediasoup
+      - video-service
+      - audio-service
+    restart: unless-stopped
+
+  # MediaSoup WebRTC Server (Public WebRTC ports)
+  mediasoup:
+    build:
+      context: ./mediasoup-server
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:3001:3001"  # Internal API
+      - "${RTC_MIN_PORT:-10000}-${RTC_MAX_PORT:-10100}:${RTC_MIN_PORT:-10000}-${RTC_MAX_PORT:-10100}/udp"  # WebRTC ports
+    environment:
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=3001
+      - NODE_ENV=production
+      - SSL_ENABLED=false  # Nginx handles SSL
+      - ANNOUNCED_IP=${SERVER_PUBLIC_IP}  # Your server's public IP
+      - LISTEN_IP=0.0.0.0
+      - RTC_MIN_PORT=${RTC_MIN_PORT:-10000}
+      - RTC_MAX_PORT=${RTC_MAX_PORT:-10100}
+      - REDACTION_SERVICE_URL=http://audio-service:5002
+      - VIDEO_SERVICE_URL=http://video-service:5001
+      - PROCESSING_DELAY_MS=${PROCESSING_DELAY_MS:-8000}
+      - FRAME_RATE=${FRAME_RATE:-30}
+      - PROCESS_EVERY_NTH_FRAME=${PROCESS_EVERY_NTH_FRAME:-15}
+      - BUFFER_DURATION_MS=${BUFFER_DURATION_MS:-3000}
+      - CORS_ORIGINS=${CORS_ALLOWED_ORIGINS}
+    networks:
+      - app-network
+    depends_on:
+      - video-service
+      - audio-service
+    restart: unless-stopped
+
+  # Video Processing Service (Internal only)
+  video-service:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.video
+    ports:
+      - "127.0.0.1:5001:5001"  # Only bind to localhost
+    environment:
+      - FLASK_HOST=0.0.0.0
+      - FLASK_PORT=5001
+      - FLASK_ENV=production
+    volumes:
+      - ./backend/video_models:/app/video_models
+      - ./backend/face_embeddings:/app/face_embeddings
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  # Audio Processing Service (Internal only)
+  audio-service:
+    build:
+      context: ./audio-william
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:5002:5002"  # Only bind to localhost
+    environment:
+      - FLASK_HOST=0.0.0.0
+      - FLASK_PORT=5002
+      - FLASK_ENV=production
+    volumes:
+      - ./audio-william/models:/app/models
+      - ./audio-william/debug_audio:/app/debug_audio
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  # Face Enrollment Service (Internal only, optional)
+  face-enrollment:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.face
+    ports:
+      - "127.0.0.1:5003:5003"  # Only bind to localhost
+    environment:
+      - FLASK_HOST=0.0.0.0
+      - FLASK_PORT=5003
+      - FLASK_ENV=production
+    volumes:
+      - ./backend/face_embeddings:/app/face_embeddings
+    networks:
+      - app-network
+    restart: unless-stopped
+    profiles:
+      - face-enrollment
+
+  # Frontend Next.js Application (Internal only)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:3000:3000"  # Only bind to localhost
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+      - NEXT_PUBLIC_MEDIASOUP_URL=${NEXT_PUBLIC_MEDIASOUP_URL}
+      - NEXT_PUBLIC_VIDEO_SERVICE_URL=${NEXT_PUBLIC_VIDEO_SERVICE_URL}
+      - NEXT_PUBLIC_FACE_ENROLLMENT_API_URL=${NEXT_PUBLIC_FACE_ENROLLMENT_API_URL}
+      - NEXT_PUBLIC_REDACTION_SERVICE_URL=${NEXT_PUBLIC_REDACTION_SERVICE_URL}
+    networks:
+      - app-network
+    depends_on:
+      - backend
+      - mediasoup
+    restart: unless-stopped
+
+  # Nginx Reverse Proxy (Public facing)
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"    # Public HTTP
+      - "443:443"  # Public HTTPS
+    volumes:
+      - ./nginx/nginx.single-machine.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    networks:
+      - app-network
+    depends_on:
+      - frontend
+      - backend
+      - mediasoup
+    restart: unless-stopped
+
+networks:
+  app-network:
+    driver: bridge

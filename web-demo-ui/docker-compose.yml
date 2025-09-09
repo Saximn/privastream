@@ -1,0 +1,168 @@
+version: '3.8'
+
+services:
+  # Backend Flask + Socket.IO Server
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "${FLASK_PORT:-5000}:5000"
+      - "${FLASK_SSL_PORT:-5443}:5443"
+    environment:
+      - FLASK_HOST=0.0.0.0
+      - FLASK_PORT=5000
+      - FLASK_ENV=production
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-this}
+      - SSL_ENABLED=${SSL_ENABLED:-false}
+      - SSL_CERT_PATH=/app/ssl/cert.pem
+      - SSL_KEY_PATH=/app/ssl/key.pem
+      - MEDIASOUP_SERVER_URL=http://mediasoup:3001
+      - VIDEO_SERVICE_URL=http://video-service:5001
+      - AUDIO_SERVICE_URL=http://audio-service:5002
+      - FACE_ENROLLMENT_API_URL=http://face-enrollment:5003
+      - CORS_ALLOWED_ORIGINS=*
+      - SOCKETIO_CORS_ALLOWED_ORIGINS=*
+    volumes:
+      - ./ssl:/app/ssl:ro
+    networks:
+      - app-network
+    depends_on:
+      - mediasoup
+      - video-service
+      - audio-service
+
+  # MediaSoup WebRTC Server
+  mediasoup:
+    build:
+      context: ./mediasoup-server
+      dockerfile: Dockerfile
+    ports:
+      - "${MEDIASOUP_PORT:-3001}:3001"
+      - "${MEDIASOUP_SSL_PORT:-3443}:3443"
+      - "10000-10100:10000-10100/udp"  # RTC ports
+    environment:
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=3001
+      - NODE_ENV=production
+      - SSL_ENABLED=${SSL_ENABLED:-false}
+      - SSL_CERT_PATH=/app/ssl/cert.pem
+      - SSL_KEY_PATH=/app/ssl/key.pem
+      - ANNOUNCED_IP=${ANNOUNCED_IP:-127.0.0.1}
+      - LISTEN_IP=0.0.0.0
+      - RTC_MIN_PORT=10000
+      - RTC_MAX_PORT=10100
+      - REDACTION_SERVICE_URL=http://audio-service:5002
+      - VIDEO_SERVICE_URL=http://video-service:5001
+      - PROCESSING_DELAY_MS=8000
+      - FRAME_RATE=30
+      - PROCESS_EVERY_NTH_FRAME=15
+      - BUFFER_DURATION_MS=3000
+      - CORS_ORIGINS=*
+    volumes:
+      - ./ssl:/app/ssl:ro
+    networks:
+      - app-network
+    depends_on:
+      - video-service
+      - audio-service
+
+  # Video Processing Service
+  video-service:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.video
+    ports:
+      - "${VIDEO_SERVICE_PORT:-5001}:5001"
+    environment:
+      - FLASK_HOST=0.0.0.0
+      - FLASK_PORT=5001
+      - FLASK_ENV=production
+    volumes:
+      - ./backend/video_models:/app/video_models
+      - ./backend/face_embeddings:/app/face_embeddings
+    networks:
+      - app-network
+
+  # Audio Processing Service (Vosk + BERT)
+  audio-service:
+    build:
+      context: ./audio-william
+      dockerfile: Dockerfile
+    ports:
+      - "${AUDIO_SERVICE_PORT:-5002}:5002"
+    environment:
+      - FLASK_HOST=0.0.0.0
+      - FLASK_PORT=5002
+      - FLASK_ENV=production
+    volumes:
+      - ./audio-william/models:/app/models
+      - ./audio-william/debug_audio:/app/debug_audio
+    networks:
+      - app-network
+
+  # Face Enrollment Service (Optional)
+  face-enrollment:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.face
+    ports:
+      - "${FACE_ENROLLMENT_PORT:-5003}:5003"
+    environment:
+      - FLASK_HOST=0.0.0.0
+      - FLASK_PORT=5003
+      - FLASK_ENV=production
+    volumes:
+      - ./backend/face_embeddings:/app/face_embeddings
+    networks:
+      - app-network
+    profiles:
+      - face-enrollment
+
+  # Frontend Next.js Application
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+      - "${FRONTEND_SSL_PORT:-3443}:3443"
+    environment:
+      - NEXT_PUBLIC_API_URL=${FRONTEND_API_URL:-http://localhost:5000}
+      - NEXT_PUBLIC_MEDIASOUP_URL=${FRONTEND_MEDIASOUP_URL:-http://localhost:3001}
+      - NEXT_PUBLIC_VIDEO_SERVICE_URL=${FRONTEND_VIDEO_SERVICE_URL:-http://localhost:5001}
+      - NEXT_PUBLIC_FACE_ENROLLMENT_API_URL=${FRONTEND_FACE_ENROLLMENT_URL:-http://localhost:5003}
+      - NEXT_PUBLIC_REDACTION_SERVICE_URL=${FRONTEND_REDACTION_SERVICE_URL:-http://localhost:5002}
+    volumes:
+      - ./ssl:/app/ssl:ro
+    networks:
+      - app-network
+    depends_on:
+      - backend
+      - mediasoup
+
+  # Nginx Reverse Proxy (Production)
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    networks:
+      - app-network
+    depends_on:
+      - frontend
+      - backend
+      - mediasoup
+    profiles:
+      - production
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  ssl-certs:
+    driver: local

@@ -1,7 +1,9 @@
 // server.js
+require('dotenv').config();
 const express = require('express');
 const { Server } = require('socket.io');
 const http = require('http');
+const https = require('https');
 const cors = require('cors');
 const mediasoup = require('mediasoup');
 const { Transform } = require('stream');
@@ -18,9 +20,42 @@ try {
   fetch = null;
 }
 
-// TIMING CONFIGURATION - Easy to adjust
-const PROCESSING_DELAY_MS = 8000; // Total delay in milliseconds (8000ms = 8 seconds)
-console.log(`[CONFIG] Video processing delay set to: ${PROCESSING_DELAY_MS}ms (${PROCESSING_DELAY_MS/1000}s)`);
+// Environment configuration
+const SERVER_HOST = process.env.SERVER_HOST || '0.0.0.0';
+const SERVER_PORT = parseInt(process.env.SERVER_PORT || '3001');
+const SSL_ENABLED = process.env.SSL_ENABLED === 'true';
+const SSL_CERT_PATH = process.env.SSL_CERT_PATH || './ssl/cert.pem';
+const SSL_KEY_PATH = process.env.SSL_KEY_PATH || './ssl/key.pem';
+const ANNOUNCED_IP = process.env.ANNOUNCED_IP || '127.0.0.1';
+const LISTEN_IP = process.env.LISTEN_IP || '0.0.0.0';
+const RTC_MIN_PORT = parseInt(process.env.RTC_MIN_PORT || '10000');
+const RTC_MAX_PORT = parseInt(process.env.RTC_MAX_PORT || '10100');
+const CORS_ORIGINS = process.env.CORS_ORIGINS || '*';
+
+// Service URLs
+const REDACTION_SERVICE_URL = process.env.REDACTION_SERVICE_URL || 'http://localhost:5002';
+const VIDEO_SERVICE_URL = process.env.VIDEO_SERVICE_URL || 'http://localhost:5001';
+
+// Processing configuration
+const PROCESSING_DELAY_MS = parseInt(process.env.PROCESSING_DELAY_MS || '8000');
+const FRAME_RATE = parseInt(process.env.FRAME_RATE || '30');
+const PROCESS_EVERY_NTH_FRAME = parseInt(process.env.PROCESS_EVERY_NTH_FRAME || '15');
+const BUFFER_DURATION_MS = parseInt(process.env.BUFFER_DURATION_MS || '3000');
+
+// WebRTC Transport Options
+const ENABLE_UDP = process.env.ENABLE_UDP !== 'false';
+const ENABLE_TCP = process.env.ENABLE_TCP !== 'false';
+const PREFER_UDP = process.env.PREFER_UDP !== 'false';
+
+console.log(`[CONFIG] MediaSoup server configuration:`);
+console.log(`  Host: ${SERVER_HOST}`);
+console.log(`  Port: ${SERVER_PORT}`);
+console.log(`  SSL Enabled: ${SSL_ENABLED}`);
+console.log(`  Announced IP: ${ANNOUNCED_IP}`);
+console.log(`  RTC Ports: ${RTC_MIN_PORT}-${RTC_MAX_PORT}`);
+console.log(`  Processing delay: ${PROCESSING_DELAY_MS}ms (${PROCESSING_DELAY_MS/1000}s)`);
+console.log(`  Video service: ${VIDEO_SERVICE_URL}`);
+console.log(`  Audio service: ${REDACTION_SERVICE_URL}`);
 
 // Import Audio Redaction Processor
 const { AudioRedactionProcessor } = require('./audio-redaction-processor');
@@ -29,27 +64,56 @@ const { WebRTCVideoProcessor } = require('./webrtc-video-processor');
 
 // Initialize Audio Redaction Processor  
 const audioRedactionProcessor = new AudioRedactionProcessor({
-  redactionServiceUrl: 'http://localhost:5002',
+  redactionServiceUrl: REDACTION_SERVICE_URL,
   sampleRate: 16000,  // Match Vosk requirements
   channels: 1,        // Mono for better transcription
-  bufferDurationMs: 3000
+  bufferDurationMs: BUFFER_DURATION_MS
 });
 
 // Initialize WebRTC Video Processor
 const videoProcessor = new WebRTCVideoProcessor({
-  videoServiceUrl: 'http://localhost:5001',
-  frameRate: 30,
-  processEveryNthFrame: 15,
-  bufferDurationMs: 3000  // Match audio processing timing
+  videoServiceUrl: VIDEO_SERVICE_URL,
+  frameRate: FRAME_RATE,
+  processEveryNthFrame: PROCESS_EVERY_NTH_FRAME,
+  bufferDurationMs: BUFFER_DURATION_MS  // Match audio processing timing
 });
 
 const app = express();
-const server = http.createServer(app);
-app.use(cors());
+
+// Create server (HTTP or HTTPS)
+let server;
+if (SSL_ENABLED) {
+  try {
+    const options = {
+      cert: fs.readFileSync(SSL_CERT_PATH),
+      key: fs.readFileSync(SSL_KEY_PATH)
+    };
+    server = https.createServer(options, app);
+    console.log(`[SSL] HTTPS server created with cert: ${SSL_CERT_PATH}`);
+  } catch (error) {
+    console.error(`[SSL] Failed to load SSL certificates: ${error.message}`);
+    console.log('[SSL] Falling back to HTTP');
+    server = http.createServer(app);
+  }
+} else {
+  server = http.createServer(app);
+}
+
+// Configure CORS
+if (CORS_ORIGINS === '*') {
+  app.use(cors());
+} else {
+  app.use(cors({ origin: CORS_ORIGINS.split(',') }));
+}
 app.use(express.json());
 
+// Configure Socket.IO
+const corsConfig = CORS_ORIGINS === '*' 
+  ? { origin: "*", methods: ["GET", "POST"] }
+  : { origin: CORS_ORIGINS.split(','), methods: ["GET", "POST"] };
+
 const io = new Server(server, {
-  cors: { origin: "*", methods: ["GET", "POST"] }
+  cors: corsConfig
 });
 
 // Mediasoup codec config
@@ -59,10 +123,10 @@ const mediaCodecs = [
 ];
 
 const webRtcTransportOptions = {
-  listenIps: [{ ip: '0.0.0.0', announcedIp: '127.0.0.1' }],
-  enableUdp: true,
-  enableTcp: true,
-  preferUdp: true
+  listenIps: [{ ip: LISTEN_IP, announcedIp: ANNOUNCED_IP }],
+  enableUdp: ENABLE_UDP,
+  enableTcp: ENABLE_TCP,
+  preferUdp: PREFER_UDP
 };
 
 // Global Mediasoup objects
@@ -82,7 +146,10 @@ const audioChunkStartTimes = new Map(); // roomId -> [startTime1, startTime2, ..
 
 // Initialize Mediasoup
 async function createWorker() {
-  worker = await mediasoup.createWorker({ rtcMinPort: 10000, rtcMaxPort: 10100 });
+  worker = await mediasoup.createWorker({ 
+    rtcMinPort: RTC_MIN_PORT, 
+    rtcMaxPort: RTC_MAX_PORT 
+  });
   worker.on('died', () => setTimeout(() => process.exit(1), 2000));
 }
 
@@ -99,7 +166,7 @@ async function init() {
 async function sendToPython(frameB64, roomId = null) {
   if (fetch) {
     // Use node-fetch
-    const res = await fetch('http://localhost:5001/process-frame', {
+    const res = await fetch(`${VIDEO_SERVICE_URL}/process-frame`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ frame: frameB64, room_id: roomId })
@@ -111,7 +178,7 @@ async function sendToPython(frameB64, roomId = null) {
     return new Promise((resolve, reject) => {
       const postData = JSON.stringify({ frame: frameB64, room_id: roomId });
       const options = {
-        hostname: 'localhost',
+        hostname: new URL(VIDEO_SERVICE_URL).hostname,
         port: 5001,
         path: '/process-frame',
         method: 'POST',
@@ -144,7 +211,7 @@ async function sendToPython(frameB64, roomId = null) {
 // Send frame to Python for detection only (using existing process-frame endpoint)
 async function sendToPythonForDetection(frameB64, roomId = null) {
   if (fetch) {
-    const res = await fetch('http://localhost:5001/process-frame', {
+    const res = await fetch(`${VIDEO_SERVICE_URL}/process-frame`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ frame: frameB64, detect_only: true, room_id: roomId })
@@ -160,7 +227,7 @@ async function sendToPythonForDetection(frameB64, roomId = null) {
     return new Promise((resolve, reject) => {
       const postData = JSON.stringify({ frame: frameB64, detect_only: true, room_id: roomId });
       const options = {
-        hostname: 'localhost',
+        hostname: new URL(VIDEO_SERVICE_URL).hostname,
         port: 5001,
         path: '/process-frame',
         method: 'POST',
@@ -245,7 +312,7 @@ async function applyBlurToFrame(frameB64, boundingBoxes, roomId = null) {
 async function callPythonBlur(frameB64, boundingBoxes, roomId = null) {
   if (fetch) {
     // Use existing endpoint with blur_only flag
-    const res = await fetch('http://localhost:5001/process-frame', {
+    const res = await fetch(`${VIDEO_SERVICE_URL}/process-frame`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
@@ -269,7 +336,7 @@ async function callPythonBlur(frameB64, boundingBoxes, roomId = null) {
         room_id: roomId
       });
       const options = {
-        hostname: 'localhost',
+        hostname: new URL(VIDEO_SERVICE_URL).hostname,
         port: 5001,
         path: '/process-frame',
         method: 'POST',
@@ -416,7 +483,9 @@ io.on('connection', socket => {
     });
     
     console.log(`[AUDIO-SERVER] Room created: ${roomId} with audio processing enabled`);
-    callback({ success: true, roomId, mediasoupUrl: 'http://localhost:3001' });
+    const protocol = SSL_ENABLED ? 'https' : 'http';
+    const mediasoupUrl = `${protocol}://${ANNOUNCED_IP === '127.0.0.1' ? 'localhost' : ANNOUNCED_IP}:${SERVER_PORT}`;
+    callback({ success: true, roomId, mediasoupUrl });
   });
 
   // Join room
@@ -828,5 +897,15 @@ io.on('connection', socket => {
 
 app.get('/health', (req, res) => res.json({ status:'healthy', mediasoup:'ready' }));
 
-const PORT = process.env.PORT || 3001;
-init().then(() => server.listen(PORT, () => console.log(`Server running on port ${PORT}`)));
+// Start server
+init().then(() => {
+  server.listen(SERVER_PORT, SERVER_HOST, () => {
+    const protocol = SSL_ENABLED ? 'https' : 'http';
+    console.log(`🚀 MediaSoup server running on ${protocol}://${SERVER_HOST}:${SERVER_PORT}`);
+    console.log(`   SSL: ${SSL_ENABLED ? 'Enabled' : 'Disabled'}`);
+    console.log(`   CORS: ${CORS_ORIGINS}`);
+  });
+}).catch(error => {
+  console.error('Failed to initialize MediaSoup server:', error);
+  process.exit(1);
+});

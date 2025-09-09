@@ -55,7 +55,7 @@ export default function ProcessedVideoViewer() {
 
         // Connect to SFU server
         console.log("[VIEWER] Connecting to SFU server...");
-        sfuSocketRef.current = io("http://localhost:3001");
+        sfuSocketRef.current = io(process.env.NEXT_PUBLIC_MEDIASOUP_URL || "http://localhost:3001");
 
         await new Promise<void>((resolve) => {
           sfuSocketRef.current!.on("connect", () => {

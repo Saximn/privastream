@@ -159,7 +159,7 @@ export default function EnrollmentPage() {
   const sendFrameForDetection = async (frameData: string) => {
     try {
       console.log("[FRONTEND] Sending face detection request for room:", roomId);
-      const response = await fetch("http://localhost:5001/face-detection", {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_VIDEO_SERVICE_URL || "http://localhost:5001"}/face-detection`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -289,7 +289,7 @@ export default function EnrollmentPage() {
       }
 
       try {
-        const response = await fetch("http://localhost:5001/face-enrollment", {
+        const response = await fetch(`${process.env.NEXT_PUBLIC_VIDEO_SERVICE_URL || "http://localhost:5001"}/face-enrollment`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
