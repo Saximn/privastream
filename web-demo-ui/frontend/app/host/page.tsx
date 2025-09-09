@@ -15,6 +15,8 @@ export default function Host() {
   // Video Filtering State
   const [isVideoFilterEnabled, setIsVideoFilterEnabled] = useState(false);
   const [videoFilterStats, setVideoFilterStats] = useState<any>(null);
+  const [isPIIDetectionEnabled, setIsPIIDetectionEnabled] = useState(false);
+  const [totalPIIDetected, setTotalPIIDetected] = useState(0);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -172,6 +174,7 @@ export default function Host() {
       }
     };
 
+    initializeConnections();
     initializeConnections();
 
     return () => {
@@ -433,90 +436,282 @@ export default function Host() {
     }
   };
 
+  const copyRoomId = () => {
+    navigator.clipboard.writeText(roomId);
+  };
+
   return (
-    <div className="min-h-screen bg-gray-900 p-4">
-      <div className="max-w-6xl mx-auto">
-        <div className="bg-white rounded-lg p-6 mb-6">
-          <h1 className="text-3xl font-bold text-center mb-6 text-gray-800">
-            SFU Host Stream
-          </h1>
+    <div className="min-h-screen bg-white dark:bg-black">
+      <main className="container mx-auto px-4 py-8">
+        <div className="max-w-7xl mx-auto">
+          {/* Header */}
+          <div className="text-center mb-8 relative">
+            <h1 className="text-4xl font-bold mb-2 text-black dark:text-white">
+              VirtualSecure Stream Host
+            </h1>
+            <p className="text-gray-600 dark:text-gray-400">
+              Professional streaming with privacy protection
+            </p>
+            <div className="flex items-center justify-center gap-6 mt-4">
+              {roomId && (
+                <div className="p-3 bg-gray-100 dark:bg-gray-800 rounded-lg">
+                  <div className="text-sm text-gray-600 dark:text-gray-400 mb-1">Room ID</div>
+                  <div className="font-mono text-lg font-bold text-black dark:text-white">
+                    {roomId}
+                  </div>
+                </div>
+              )}
+              
+              {/* Privacy Filter Toggle */}
+              <div className="flex items-center gap-3 p-3 bg-gray-100 dark:bg-gray-800 rounded-lg">
+                <div className="text-sm text-gray-600 dark:text-gray-400">
+                  Privacy Filter
+                </div>
+                <button
+                  onClick={() => setIsVideoFilterEnabled(!isVideoFilterEnabled)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 ${
+                    isVideoFilterEnabled
+                      ? "bg-green-500 focus:ring-green-500"
+                      : "bg-gray-300 focus:ring-gray-500"
+                  }`}
+                  role="switch"
+                  aria-checked={isVideoFilterEnabled}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-lg transition-transform ${
+                      isVideoFilterEnabled ? "translate-x-6" : "translate-x-1"
+                    }`}
+                  />
+                </button>
+                <div className="text-xs text-gray-500 dark:text-gray-400">
+                  {isVideoFilterEnabled ? "ON" : "OFF"}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Error Banner */}
           {error && (
-            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
-              {error}
+            <div className="bg-red-50 border border-red-200 text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400 px-4 py-3 rounded-lg mb-6">
+              <div className="flex items-center gap-2">
+                <span className="text-red-500">⚠️</span>
+                {error}
+              </div>
             </div>
           )}
 
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-            <div className="bg-gray-100 p-4 rounded-lg">
-              <h3 className="font-semibold text-gray-700 mb-2">Room ID</h3>
-              <code className="bg-gray-200 px-2 py-1 rounded text-sm font-mono">
-                {roomId || "Generating..."}
-              </code>
-            </div>
-            <div className="bg-gray-100 p-4 rounded-lg">
-              <h3 className="font-semibold text-gray-700 mb-2">Viewers</h3>
-              <div className="text-2xl font-bold text-green-600">
-                {viewerCount}
-              </div>
-            </div>
-            <div className="bg-gray-100 p-4 rounded-lg">
-              <h3 className="font-semibold text-gray-700 mb-2">Status</h3>
-              <div className="text-sm">
-                <div
-                  className={`inline-block w-2 h-2 rounded-full mr-2 ${
-                    isStreaming ? "bg-green-500" : "bg-red-500"
-                  }`}
+          {/* Mobile-First Layout: Video on top, controls below */}
+          <div className="flex flex-col lg:grid lg:grid-cols-3 gap-8">
+            {/* Video Stream - First on mobile, right column on desktop */}
+            <div className="order-1 lg:order-2 lg:col-span-2 flex flex-col">
+              {/* Video Stream */}
+              <div className="bg-black dark:bg-white border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl overflow-hidden flex-1 min-h-[300px] lg:min-h-[400px] relative">
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  muted
+                  playsInline
+                  className="w-full h-full object-contain"
+                  style={{ backgroundColor: "#000" }}
+                  onLoadedData={async () => {
+                    console.log("Video loaded and ready");
+                    if (videoRef.current) {
+                      try {
+                        await videoRef.current.play();
+                        console.log("Video playback started successfully");
+                      } catch (error) {
+                        console.log("Video play failed:", error);
+                      }
+                    }
+                  }}
+                  onError={(e) => {
+                    console.error("Video error:", e);
+                  }}
                 />
-                {isStreaming ? "Live (SFU)" : "Offline"}
+
+                {!isStreaming && (
+                  <div className="absolute inset-0 flex items-center justify-center text-gray-400 dark:text-gray-600">
+                    <div className="text-center">
+                      <div className="text-4xl lg:text-6xl mb-4">📹</div>
+                      <div className="text-gray-400 dark:text-gray-600 text-lg">
+                        Ready to start streaming
+                      </div>
+                      <div className="text-sm mt-2 opacity-75">
+                        Click "Start Stream" to begin
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {connectionState === "connecting" && (
+                  <div className="absolute inset-0 flex items-center justify-center text-gray-400 dark:text-gray-600">
+                    <div className="text-center">
+                      <div className="text-4xl lg:text-6xl mb-4">🔄</div>
+                      <div className="text-gray-400 dark:text-gray-600 text-lg">
+                        Connecting to server...
+                      </div>
+                      <div className="text-sm mt-2 opacity-75">Please wait</div>
+                    </div>
+                  </div>
+                )}
+
+                {error && (
+                  <div className="absolute inset-0 flex items-center justify-center text-gray-400 dark:text-gray-600">
+                    <div className="text-center">
+                      <div className="text-4xl lg:text-6xl mb-4">❌</div>
+                      <div className="text-gray-400 dark:text-gray-600 text-lg">
+                        Stream error
+                      </div>
+                      <div className="text-sm mt-2 opacity-75">
+                        Check console for details
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
-            <div className="bg-gray-100 p-4 rounded-lg">
-              <h3 className="font-semibold text-gray-700 mb-2">Video Filter</h3>
-              <button
-                onClick={() => setIsVideoFilterEnabled(!isVideoFilterEnabled)}
-                disabled={isStreaming}
-                className={`text-white text-sm px-3 py-1 rounded disabled:opacity-50 ${
-                  isVideoFilterEnabled ? "bg-purple-600" : "bg-gray-600"
-                }`}
-              >
-                {isVideoFilterEnabled ? "Enabled" : "Disabled"}
-              </button>
+
+            {/* Controls & Settings - Second on mobile, left column on desktop */}
+            <div className="order-2 lg:order-1 lg:col-span-1 space-y-6">
+              {/* Stream Controls */}
+              <div className="bg-white dark:bg-black border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl p-6">
+                <h2 className="text-xl font-semibold text-black dark:text-white mb-4">
+                  Stream Controls
+                </h2>
+
+                <div className="space-y-4">
+                  <div className="flex gap-4 justify-center">
+                    {!isStreaming ? (
+                      <button
+                        onClick={startStreaming}
+                        disabled={connectionState !== "ready"}
+                        className="bg-black hover:bg-gray-800 text-white dark:bg-white dark:hover:bg-gray-200 dark:text-black font-bold py-3 px-6 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed w-full"
+                      >
+                        {connectionState === "ready"
+                          ? "Start SFU Streaming"
+                          : "Initializing..."}
+                      </button>
+                    ) : (
+                      <button
+                        onClick={stopStreaming}
+                        className="bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-lg transition-colors w-full"
+                      >
+                        Stop Streaming
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="text-xs text-gray-600 dark:text-gray-400 text-center space-y-1">
+                    <p>
+                      <strong>SFU Mode:</strong> Scalable streaming via
+                      Mediasoup server
+                    </p>
+                    <p>Supports hundreds of concurrent viewers</p>
+                    <p>
+                      <strong>Privacy Protection:</strong> Real-time PII
+                      detection
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Status Dashboard */}
+              <div className="bg-white dark:bg-black border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl p-6">
+                <h2 className="text-xl font-semibold text-black dark:text-white mb-4">
+                  Status Dashboard
+                </h2>
+
+                <div className="space-y-4">
+                  {/* Stream Status - Full Width */}
+                  <div className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 p-4 rounded-lg">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="font-medium text-black dark:text-white text-sm mb-1">
+                          Stream Status
+                        </h3>
+                        <div className="flex items-center gap-2">
+                          <div
+                            className={`w-3 h-3 rounded-full ${
+                              isStreaming ? "bg-green-500" : "bg-red-500"
+                            }`}
+                          />
+                          <span className="text-sm text-black dark:text-white font-medium">
+                            {isStreaming ? "Live" : "Offline"}
+                          </span>
+                        </div>
+                        {connectionState && (
+                          <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                            {connectionState}
+                          </div>
+                        )}
+                      </div>
+                      <div className="text-right">
+                        <div className="text-2xl font-bold text-black dark:text-white">
+                          {viewerCount}
+                        </div>
+                        <div className="text-xs text-gray-600 dark:text-gray-400">
+                          viewers
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* PII Detection & Room ID Row */}
+                  <div className="grid grid-cols-1 gap-4">
+                    <div className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 p-4 rounded-lg">
+                      <h3 className="font-medium text-black dark:text-white text-sm mb-2">
+                        PII Detection
+                      </h3>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div
+                            className={`w-3 h-3 rounded-full ${
+                              isPIIDetectionEnabled
+                                ? "bg-green-500"
+                                : "bg-red-500"
+                            }`}
+                          />
+                          <span className="text-sm text-black dark:text-white font-medium">
+                            {isPIIDetectionEnabled ? "Active" : "Inactive"}
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-2xl font-bold text-black dark:text-white">
+                            {totalPIIDetected}
+                          </div>
+                          <div className="text-xs text-gray-600 dark:text-gray-400">
+                            detected
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 p-4 rounded-lg">
+                      <h3 className="font-medium text-black dark:text-white text-sm mb-2">
+                        Room ID
+                      </h3>
+                      <div className="flex items-center gap-2">
+                        <code className="bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-600 px-2 py-1 rounded text-sm font-mono text-black dark:text-white flex-1 truncate">
+                          {roomId || "Generating..."}
+                        </code>
+                        <button
+                          onClick={copyRoomId}
+                          disabled={!roomId}
+                          className="bg-black hover:bg-gray-800 text-white dark:bg-white dark:hover:bg-gray-200 dark:text-black text-sm px-3 py-1 rounded disabled:opacity-50 flex-shrink-0"
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
             </div>
-          </div>
 
-          <div className="flex gap-4 justify-center mb-6">
-            {!isStreaming ? (
-              <button
-                onClick={startStreaming}
-                disabled={connectionState !== "ready"}
-                className="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg transition-colors disabled:opacity-50"
-              >
-                {connectionState === "ready"
-                  ? "Start SFU Streaming"
-                  : "Initializing..."}
-              </button>
-            ) : (
-              <button
-                onClick={stopStreaming}
-                className="bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-lg transition-colors"
-              >
-                Stop Streaming
-              </button>
-            )}
-          </div>
-
-          <div className="bg-black rounded-lg overflow-hidden">
-            <video
-              ref={videoRef}
-              autoPlay
-              muted
-              playsInline
-              className="w-full h-auto max-h-96 object-contain"
-              style={{ backgroundColor: "#000" }}
-            />
           </div>
         </div>
-      </div>
+      </main>
     </div>
   );
 }

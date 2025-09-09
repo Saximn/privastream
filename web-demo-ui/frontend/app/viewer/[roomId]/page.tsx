@@ -34,6 +34,7 @@ export default function Viewer() {
   });
   const [isMuted, setIsMuted] = useState(true);
   const [mounted, setMounted] = useState(false);
+  const [streamAvailable, setStreamAvailable] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const sfuSocketRef = useRef<Socket | null>(null);
@@ -45,7 +46,7 @@ export default function Viewer() {
     new Map()
   );
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const processedFramesRef = useRef<Map<string, string>>(new Map());
+  const processedFramesRef = useRef<Map<string, any>>(new Map());
   const canvasStreamRef = useRef<MediaStream | null>(null);
   const isStreamInitialized = useRef<boolean>(false);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -233,6 +234,7 @@ export default function Viewer() {
         console.log("[VIEWER] Host disconnected");
         setError("Host disconnected");
         setStats((prev) => ({ ...prev, hostStreaming: false }));
+        setStreamAvailable(false);
 
         // Clear all consumers
         consumersRef.current.forEach((consumer) => consumer.close());
@@ -263,12 +265,13 @@ export default function Viewer() {
         // Display the frame (with client-side blur if needed)
         displayProcessedFrame(data.frame, data.boundingBoxCount);
 
-        // Update stats
+        // Update stats and stream availability
         setStats((prev) => ({
           ...prev,
           receivingVideo: true,
           hostStreaming: true,
         }));
+        setStreamAvailable(true);
 
         // Clean up old frames (keep last 30)
         if (processedFramesRef.current.size > 30) {
@@ -468,6 +471,11 @@ export default function Viewer() {
           receivingVideo: kind === "video" || prev.receivingVideo,
           receivingAudio: kind === "audio" || prev.receivingAudio,
         }));
+        
+        // Set stream as available when we have video
+        if (kind === "video") {
+          setStreamAvailable(true);
+        }
 
         // Update video element
         updateVideoElement();
@@ -594,151 +602,241 @@ export default function Viewer() {
 
   if (!mounted) {
     return (
-      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
-        <div className="text-white text-xl">Loading...</div>
+      <div className="min-h-screen bg-white dark:bg-black">
+        <main className="container mx-auto px-4 py-8">
+          <div className="max-w-7xl mx-auto">
+            <div className="text-center mb-8">
+              <h1 className="text-4xl font-bold mb-2 text-black dark:text-white">
+                Loading VirtualSecure...
+              </h1>
+              <p className="text-gray-600 dark:text-gray-400">
+                Initializing secure connection
+              </p>
+            </div>
+            <div className="bg-black dark:bg-white border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl overflow-hidden">
+              <video
+                autoPlay
+                muted={true}
+                playsInline
+                controls
+                className="w-full h-auto object-contain"
+                style={{ backgroundColor: "#000", minHeight: "400px" }}
+              />
+            </div>
+          </div>
+        </main>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-900 p-4">
-      <div className="max-w-6xl mx-auto">
-        {/* Header */}
-        <div className="bg-white rounded-lg p-6 mb-6">
-          <h1 className="text-3xl font-bold text-center mb-6 text-gray-800">
-            Live Stream Viewer
-          </h1>
-
-          {error && (
-            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
-              {error}
-            </div>
-          )}
-
-          {/* Status Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-            <div className="bg-gray-100 p-4 rounded-lg">
-              <h3 className="font-semibold text-gray-700 mb-2">Room</h3>
-              <code className="bg-gray-200 px-2 py-1 rounded text-sm font-mono">
-                {roomId}
-              </code>
-            </div>
-
-            <div className="bg-gray-100 p-4 rounded-lg">
-              <h3 className="font-semibold text-gray-700 mb-2">Connection</h3>
-              <div className="text-sm">
-                <div
-                  className={`inline-block w-2 h-2 rounded-full mr-2 ${getConnectionStatusColor()}`}
-                />
-                {getConnectionStatusText()}
-              </div>
-            </div>
-
-            <div className="bg-gray-100 p-4 rounded-lg">
-              <h3 className="font-semibold text-gray-700 mb-2">Video</h3>
-              <div className="text-sm">
-                <div
-                  className={`inline-block w-2 h-2 rounded-full mr-2 ${
-                    stats.receivingVideo ? "bg-green-500" : "bg-gray-400"
-                  }`}
-                />
-                {stats.receivingVideo ? "Receiving" : "Waiting"}
-              </div>
-            </div>
-
-            <div className="bg-gray-100 p-4 rounded-lg">
-              <h3 className="font-semibold text-gray-700 mb-2">Audio</h3>
-              <div className="text-sm">
-                <div
-                  className={`inline-block w-2 h-2 rounded-full mr-2 ${
-                    stats.receivingAudio ? "bg-green-500" : "bg-gray-400"
-                  }`}
-                />
-                {stats.receivingAudio ? "Receiving" : "Waiting"}
-              </div>
-            </div>
-          </div>
-
-          <div className="text-sm text-gray-600 text-center">
-            <p>
-              <strong>Flow:</strong> Host → MediaSoup SFU → Python Blur Service
-              → SFU → You
+    <div className="min-h-screen bg-white dark:bg-black">
+      <main className="container mx-auto px-4 py-8">
+        <div className="max-w-7xl mx-auto">
+          {/* Header */}
+          <div className="text-center mb-8">
+            <h1 className="text-4xl font-bold mb-2 text-black dark:text-white">
+              VirtualSecure Stream Viewer
+            </h1>
+            <p className="text-gray-600 dark:text-gray-400">
+              Secure viewing with privacy protection
             </p>
-            <p>Real-time video streaming with privacy protection</p>
-          </div>
-        </div>
-
-        {/* Video Player */}
-        <div className="bg-black rounded-lg overflow-hidden relative">
-          <video
-            ref={videoRef}
-            autoPlay
-            muted={isMuted}
-            playsInline
-            controls
-            className="w-full h-auto object-contain"
-            style={{ backgroundColor: "#000", minHeight: "400px" }}
-            onLoadedData={() => {
-              console.log("[VIEWER] Video loaded");
-              if (videoRef.current) {
-                videoRef.current.play().catch((err) => {
-                  console.log("[VIEWER] Autoplay failed:", err);
-                });
-              }
-            }}
-            onError={(e) => {
-              console.error("[VIEWER] Video error:", e);
-            }}
-          />
-
-          {/* Unmute Button */}
-          {isMuted && stats.receivingAudio && (
-            <div
-              className="absolute bottom-4 right-4 bg-black bg-opacity-75 text-white p-3 rounded-lg cursor-pointer z-10 hover:bg-opacity-90 transition-all duration-200"
-              onClick={handleUnmute}
-            >
-              <div className="flex items-center space-x-2">
-                <div className="text-2xl">🔊</div>
-                <div className="text-sm font-medium">Unmute</div>
-              </div>
-            </div>
-          )}
-
-          {/* Waiting States */}
-          {!stats.hostStreaming && connectionState === "connected" && (
-            <div className="absolute inset-0 flex items-center justify-center text-gray-400">
-              <div className="text-center">
-                <div className="text-6xl mb-4">⏳</div>
-                <div>Waiting for host to start streaming...</div>
-                <div className="text-sm mt-2 opacity-75">Room: {roomId}</div>
-              </div>
-            </div>
-          )}
-
-          {connectionState === "connecting" && (
-            <div className="absolute inset-0 flex items-center justify-center text-gray-400">
-              <div className="text-center">
-                <div className="text-6xl mb-4 animate-spin">🔄</div>
-                <div>Connecting to stream...</div>
-                <div className="text-sm mt-2 opacity-75">Please wait</div>
-              </div>
-            </div>
-          )}
-
-          {(connectionState === "error" ||
-            connectionState === "disconnected") && (
-            <div className="absolute inset-0 flex items-center justify-center text-gray-400">
-              <div className="text-center">
-                <div className="text-6xl mb-4">❌</div>
-                <div>Connection failed</div>
-                <div className="text-sm mt-2 opacity-75">
-                  {error || "Please refresh the page"}
+            {roomId && (
+              <div className="mt-4 p-3 bg-gray-100 dark:bg-gray-800 rounded-lg inline-block">
+                <div className="text-sm text-gray-600 dark:text-gray-400 mb-1">Viewing Room</div>
+                <div className="font-mono text-lg font-bold text-black dark:text-white">
+                  {roomId}
                 </div>
               </div>
+            )}
+          </div>
+
+          {/* Error Banner */}
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400 px-4 py-3 rounded-lg mb-6">
+              <div className="flex items-center gap-2">
+                <span className="text-red-500">⚠️</span>
+                {error}
+              </div>
             </div>
           )}
+
+          {/* Mobile-First Layout: Video on top, controls below */}
+          <div className="flex flex-col lg:grid lg:grid-cols-3 gap-8">
+            {/* Video Stream - First on mobile, right column on desktop */}
+            <div className="order-1 lg:order-2 lg:col-span-2 flex flex-col">
+              {/* Video Stream */}
+              <div className="bg-black dark:bg-white border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl overflow-hidden flex-1 min-h-[300px] lg:min-h-[400px] relative">
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  muted={true}
+                  playsInline
+                  controls
+                  className="w-full h-full object-contain"
+                  style={{ backgroundColor: "#000" }}
+                  onLoadedData={async () => {
+                    console.log("Video loaded and ready to play");
+                    // Always start muted and playing
+                    if (videoRef.current) {
+                      try {
+                        videoRef.current.muted = true;
+                        await videoRef.current.play();
+                        console.log("Video autoplay successful (muted)");
+                        // Mark stream as available when video actually starts playing
+                        setStreamAvailable(true);
+                      } catch (error) {
+                        console.log("Autoplay failed:", error);
+                      }
+                    }
+                  }}
+                  onPlaying={() => {
+                    console.log("Video is playing");
+                    setStreamAvailable(true);
+                  }}
+                  onError={(e) => {
+                    console.error("Video error:", e);
+                  }}
+                />
+
+                {!streamAvailable && connectionState === "connected" && (
+                  <div className="absolute inset-0 flex items-center justify-center text-gray-400 dark:text-gray-600">
+                    <div className="text-center">
+                      <div className="text-4xl lg:text-6xl mb-4">⏳</div>
+                      <div className="text-gray-400 dark:text-gray-600 text-lg">
+                        Waiting for host to start streaming...
+                      </div>
+                      <div className="text-sm mt-2 opacity-75">
+                        Connected to SFU server
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {connectionState === "connecting" && (
+                  <div className="absolute inset-0 flex items-center justify-center text-gray-400 dark:text-gray-600">
+                    <div className="text-center">
+                      <div className="text-4xl lg:text-6xl mb-4">🔄</div>
+                      <div className="text-gray-400 dark:text-gray-600 text-lg">
+                        Connecting to SFU server...
+                      </div>
+                      <div className="text-sm mt-2 opacity-75">Please wait</div>
+                    </div>
+                  </div>
+                )}
+
+                {(connectionState === "error" ||
+                  connectionState === "disconnected") && (
+                  <div className="absolute inset-0 flex items-center justify-center text-gray-400 dark:text-gray-600">
+                    <div className="text-center">
+                      <div className="text-4xl lg:text-6xl mb-4">❌</div>
+                      <div className="text-gray-400 dark:text-gray-600 text-lg">
+                        Connection failed
+                      </div>
+                      <div className="text-sm mt-2 opacity-75">
+                        Please refresh the page
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Audio Controls - Show right under video on mobile */}
+              {isMuted && streamAvailable && (
+                <div className="bg-white dark:bg-black border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl p-4 mt-4 lg:hidden">
+                  <button
+                    onClick={handleUnmute}
+                    className="bg-black hover:bg-gray-800 text-white dark:bg-white dark:hover:bg-gray-200 dark:text-black font-bold py-3 px-6 rounded-lg transition-colors w-full flex items-center justify-center gap-2"
+                  >
+                    <span className="text-xl">🔊</span>
+                    Unmute Audio
+                  </button>
+                  <div className="text-xs text-gray-600 dark:text-gray-400 text-center mt-2">
+                    Stream starts muted for autoplay compatibility
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Status & Controls - Second on mobile, left column on desktop */}
+            <div className="order-2 lg:order-1 lg:col-span-1 space-y-6">
+              {/* Connection Status */}
+              <div className="bg-white dark:bg-black border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl p-6">
+                <h2 className="text-xl font-semibold text-black dark:text-white mb-4">
+                  Connection Status
+                </h2>
+
+                <div className="space-y-4">
+                  <div className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 p-4 rounded-lg">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="font-medium text-black dark:text-white text-sm mb-1">
+                          Stream Status
+                        </h3>
+                        <div className="flex items-center gap-2">
+                          <div
+                            className={`w-3 h-3 rounded-full ${getConnectionStatusColor()}`}
+                          />
+                          <span className="text-sm text-black dark:text-white font-medium">
+                            {connectionState === "connected" && streamAvailable
+                              ? "Live"
+                              : connectionState === "connected"
+                              ? "Waiting"
+                              : connectionState === "connecting"
+                              ? "Connecting"
+                              : "Offline"}
+                          </span>
+                        </div>
+                        <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                          {getConnectionStatusText()}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+
+              {/* Audio Controls */}
+              {isMuted && streamAvailable && (
+                <div className="bg-white dark:bg-black border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl p-6">
+                  <h2 className="text-xl font-semibold text-black dark:text-white mb-4">
+                    Audio Controls
+                  </h2>
+
+                  <button
+                    onClick={handleUnmute}
+                    className="bg-black hover:bg-gray-800 text-white dark:bg-white dark:hover:bg-gray-200 dark:text-black font-bold py-3 px-6 rounded-lg transition-colors w-full flex items-center justify-center gap-2"
+                  >
+                    <span className="text-xl">�</span>
+                    Unmute Audio
+                  </button>
+
+                  <div className="text-xs text-gray-600 dark:text-gray-400 text-center mt-2">
+                    Stream starts muted for autoplay compatibility
+                  </div>
+                </div>
+              )}
+            </div>
+
+          </div>
+
+          {/* Footer Information */}
+          <div className="text-center mt-8">
+            <div className="text-sm text-gray-600 dark:text-gray-400 space-y-1">
+              <p>
+                <strong>SFU Mode:</strong> Optimized streaming via Mediasoup
+                server
+              </p>
+              <p>Low latency, high quality viewing experience</p>
+              <p>
+                <strong>Privacy Protected:</strong> Sensitive content
+                automatically redacted
+              </p>
+            </div>
+          </div>
         </div>
-      </div>
+      </main>
     </div>
   );
 }
