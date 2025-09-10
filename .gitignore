@@ -7,3 +7,4 @@ datasets
 *.pt
 
 node_modules/
+*.pem

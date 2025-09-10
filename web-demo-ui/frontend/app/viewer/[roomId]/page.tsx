@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { useParams } from "next/navigation";
 import { io, Socket } from "socket.io-client";
 import * as mediasoupClient from "mediasoup-client";
+import API_CONFIG from "@/lib/config";
 
 interface ViewerStats {
   connected: boolean;
@@ -67,7 +68,10 @@ export default function Viewer() {
 
         // Connect to SFU server
         console.log("[VIEWER] Connecting to SFU server...");
-        sfuSocketRef.current = io("http://localhost:3001");
+        sfuSocketRef.current = io(API_CONFIG.SFU_URL, {
+          transports: ["websocket"],
+          reconnectionAttempts: 3
+        });
 
         await new Promise<void>((resolve) => {
           sfuSocketRef.current!.on("connect", () => {

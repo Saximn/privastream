@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { SocketManager } from "@/lib/socket";
 import { MediasoupClient } from "@/lib/mediasoup-client";
 import { io, Socket } from "socket.io-client";
+import API_CONFIG from "@/lib/config";
 
 export default function Host() {
   const [roomId, setRoomId] = useState("");
@@ -60,7 +61,7 @@ export default function Host() {
           // Transfer enrollment data from enrolledRoomId to actual roomId
           try {
             const transferResponse = await fetch(
-              "http://localhost:5001/transfer-embedding",
+              `${API_CONFIG.VIDEO_API_URL}/transfer-embedding`,
               {
                 method: "POST",
                 headers: {
@@ -99,7 +100,7 @@ export default function Host() {
 
         // SFU socket
         setConnectionState("connecting to mediasoup...");
-        const sfuUrl = roomResponse.mediasoupUrl || "http://localhost:3001";
+        const sfuUrl = roomResponse.mediasoupUrl || API_CONFIG.SFU_URL;
         sfuSocketRef.current = io(sfuUrl, {
           transports: ["websocket"],
           reconnectionAttempts: 3,

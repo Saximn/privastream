@@ -3,14 +3,18 @@ from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_cors import CORS
 import uuid
 import requests
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'your-secret-key'
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
 CORS(app, origins="*")
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', logger=True, engineio_logger=True)
 
 # Configuration for Mediasoup server
-MEDIASOUP_SERVER_URL = 'http://localhost:3001'
+MEDIASOUP_SERVER_URL = os.getenv('MEDIASOUP_SERVER_URL', 'http://localhost:3001')
 
 rooms = {}
 users = {}

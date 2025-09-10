@@ -1,9 +1,0 @@
-.env
-venv*
-datasets
-*.jpg
-*.png
-*.jpeg
-*.pt
-
-node_modules/

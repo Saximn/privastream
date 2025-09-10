@@ -1,4 +1,5 @@
 import { io, Socket } from 'socket.io-client'
+import API_CONFIG from './config'
 
 export interface PIIEntity {
   label: string
@@ -33,9 +34,13 @@ export class SocketManager {
   private socket: Socket
   private serverUrl: string
 
-  constructor(serverUrl = 'http://localhost:5000') {
-    this.serverUrl = serverUrl
-    this.socket = io(serverUrl)
+  constructor(serverUrl?: string) {
+    this.serverUrl = serverUrl || API_CONFIG.BACKEND_URL;
+
+    this.socket = io(serverUrl, {
+      transports: ['websocket', 'polling'],
+      path: '/socket.io/'
+    })
   }
 
   connect(): Promise<string> {

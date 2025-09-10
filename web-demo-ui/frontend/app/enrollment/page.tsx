@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/form";
 import { FacePreview } from "@/components/enrollment/facepreview";
 import { useRouter } from "next/navigation";
+import API_CONFIG from "@/lib/config";
 
 interface FaceDetection {
   bbox: [number, number, number, number]; // [x1, y1, x2, y2]
@@ -159,7 +160,7 @@ export default function EnrollmentPage() {
   const sendFrameForDetection = async (frameData: string) => {
     try {
       console.log("[FRONTEND] Sending face detection request for room:", roomId);
-      const response = await fetch("http://localhost:5001/face-detection", {
+      const response = await fetch(`${API_CONFIG.VIDEO_API_URL}/face-detection`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -289,7 +290,7 @@ export default function EnrollmentPage() {
       }
 
       try {
-        const response = await fetch("http://localhost:5001/face-enrollment", {
+        const response = await fetch(`${API_CONFIG.VIDEO_API_URL}/face-enrollment`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",

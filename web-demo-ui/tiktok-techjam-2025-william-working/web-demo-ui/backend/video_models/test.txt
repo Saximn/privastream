@@ -1,2 +1,0 @@
-python eval_icdar15.py --img-dir ../datasets/ICPR/icdar15_std/ch4_test_images --gt-dir  ../datasets/ICPR/icdar15_std/ch4_test_localization_transcription_gt --max-images 200 --classifier pii_clf.joblib
-  --residual-ocr

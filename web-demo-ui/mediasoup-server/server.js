@@ -9,6 +9,8 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
+const API_CONFIG = require('./config').default;
+
 // Try to import node-fetch, fallback to http if needed
 let fetch;
 try {
@@ -29,7 +31,7 @@ const { WebRTCVideoProcessor } = require('./webrtc-video-processor');
 
 // Initialize Audio Redaction Processor  
 const audioRedactionProcessor = new AudioRedactionProcessor({
-  redactionServiceUrl: 'http://localhost:5002',
+  redactionServiceUrl: API_CONFIG.AUDIO_API_URL,
   sampleRate: 16000,  // Match Vosk requirements
   channels: 1,        // Mono for better transcription
   bufferDurationMs: 3000
@@ -37,7 +39,7 @@ const audioRedactionProcessor = new AudioRedactionProcessor({
 
 // Initialize WebRTC Video Processor
 const videoProcessor = new WebRTCVideoProcessor({
-  videoServiceUrl: 'http://localhost:5001',
+  videoServiceUrl: `${API_CONFIG.VIDEO_API_URL}`,
   frameRate: 30,
   processEveryNthFrame: 15,
   bufferDurationMs: 3000  // Match audio processing timing
@@ -99,7 +101,7 @@ async function init() {
 async function sendToPython(frameB64, roomId = null) {
   if (fetch) {
     // Use node-fetch
-    const res = await fetch('http://localhost:5001/process-frame', {
+    const res = await fetch(`${API_CONFIG.VIDEO_API_URL}/process-frame`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ frame: frameB64, room_id: roomId })
@@ -108,12 +110,15 @@ async function sendToPython(frameB64, roomId = null) {
     return data.frame;
   } else {
     // Fallback to http module
+    
     return new Promise((resolve, reject) => {
       const postData = JSON.stringify({ frame: frameB64, room_id: roomId });
+      const apiUrl = new URL(`${API_CONFIG.VIDEO_API_URL}/process-frame`);
+      const isHttps = apiUrl.protocol === 'https:';
       const options = {
-        hostname: 'localhost',
-        port: 5001,
-        path: '/process-frame',
+        hostname: apiUrl.hostname,
+        port: apiUrl.port || (isHttps ? 443 : 80),
+        path: apiUrl.pathname + apiUrl.search,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -144,7 +149,7 @@ async function sendToPython(frameB64, roomId = null) {
 // Send frame to Python for detection only (using existing process-frame endpoint)
 async function sendToPythonForDetection(frameB64, roomId = null) {
   if (fetch) {
-    const res = await fetch('http://localhost:5001/process-frame', {
+    const res = await fetch(`${API_CONFIG.VIDEO_API_URL}/process-frame`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ frame: frameB64, detect_only: true, room_id: roomId })
@@ -159,10 +164,12 @@ async function sendToPythonForDetection(frameB64, roomId = null) {
   } else {
     return new Promise((resolve, reject) => {
       const postData = JSON.stringify({ frame: frameB64, detect_only: true, room_id: roomId });
+      const apiUrl = new URL(`${API_CONFIG.VIDEO_API_URL}/process-frame`);
+      const isHttps = apiUrl.protocol === 'https:';
       const options = {
-        hostname: 'localhost',
-        port: 5001,
-        path: '/process-frame',
+        hostname: apiUrl.hostname,
+        port: apiUrl.port || (isHttps ? 443 : 80),
+        path: apiUrl.pathname + apiUrl.search,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -245,7 +252,7 @@ async function applyBlurToFrame(frameB64, boundingBoxes, roomId = null) {
 async function callPythonBlur(frameB64, boundingBoxes, roomId = null) {
   if (fetch) {
     // Use existing endpoint with blur_only flag
-    const res = await fetch('http://localhost:5001/process-frame', {
+    const res = await fetch(`${API_CONFIG.VIDEO_API_URL}/process-frame`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
@@ -268,10 +275,12 @@ async function callPythonBlur(frameB64, boundingBoxes, roomId = null) {
         polygons: [],
         room_id: roomId
       });
+      const apiUrl = new URL(`${API_CONFIG.VIDEO_API_URL}/process-frame`);
+      const isHttps = apiUrl.protocol === 'https:';
       const options = {
-        hostname: 'localhost',
-        port: 5001,
-        path: '/process-frame',
+        hostname: apiUrl.hostname,
+        port: apiUrl.port || (isHttps ? 443 : 80),
+        path: apiUrl.pathname + apiUrl.search,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -416,7 +425,7 @@ io.on('connection', socket => {
     });
     
     console.log(`[AUDIO-SERVER] Room created: ${roomId} with audio processing enabled`);
-    callback({ success: true, roomId, mediasoupUrl: 'http://localhost:3001' });
+    callback({ success: true, roomId, mediasoupUrl: API_CONFIG.SFU_URL });
   });
 
   // Join room
@@ -560,7 +569,7 @@ io.on('connection', socket => {
               
               // Process frame through Python detection service (DIRECT CALL - like working version)
               console.log('[VIDEO-SERVER] 📡 Calling Python detection service directly...');
-              const response = await fetch('http://localhost:5001/process-frame', {
+              const response = await fetch(`${API_CONFIG.VIDEO_API_URL}/process-frame`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
