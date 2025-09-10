@@ -895,18 +895,34 @@ def apply_conditional_blur():
         if blur_mouths and mouth_regions:
             print(f"[API] 👄 Applying mouth blur to {len(mouth_regions)} mouths due to PII: {pii_reason}")
             for mouth_data in mouth_regions:
-                mouth_bbox = mouth_data['bbox']
-                if mouth_data.get('landmarks'):
-                    # Use precise landmarks for better blur
-                    apply_landmark_mouth_blur(frame, mouth_data['landmarks'])
-                else:
-                    # Use bbox fallback
-                    apply_strong_mouth_blur(frame, mouth_bbox)
-                mouths_blurred += 1
+                try:
+                    mouth_bbox = mouth_data['bbox']
+                    if mouth_data.get('landmarks'):
+                        # Use precise landmarks for better blur
+                        apply_landmark_mouth_blur(frame, mouth_data['landmarks'])
+                    else:
+                        # Use bbox fallback
+                        apply_strong_mouth_blur(frame, mouth_bbox)
+                    mouths_blurred += 1
+                except Exception as e:
+                    print(f"[API] Error processing mouth {mouths_blurred}: {e}")
+                    print(f"[API] Mouth data: {mouth_data}")
                 
         # Encode result
-        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        frame_b64 = base64.b64encode(buffer).decode('utf-8')
+        try:
+            encode_result = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            if len(encode_result) != 2:
+                print(f"[API] Warning: cv2.imencode returned {len(encode_result)} values instead of 2")
+                return jsonify({"error": "Image encoding failed"}), 500
+            
+            success, buffer = encode_result
+            if not success:
+                return jsonify({"error": "Failed to encode image"}), 500
+                
+            frame_b64 = base64.b64encode(buffer).decode('utf-8')
+        except Exception as e:
+            print(f"[API] Image encoding error: {e}")
+            return jsonify({"error": "Image encoding failed"}), 500
         frame_b64 = f"data:image/jpeg;base64,{frame_b64}"
         
         return jsonify({
@@ -937,29 +953,41 @@ def apply_gaussian_blur_region(frame, region):
             frame[y1:y2, x1:x2] = cv2.GaussianBlur(roi, (0, 0), sigmaX=75, sigmaY=75)
 
 def apply_landmark_mouth_blur(frame, mouth_landmarks):
-    """Apply blur using precise mouth landmarks"""
+    """Apply rectangular blur using mouth landmarks to determine bounds"""
     try:
-        points = np.array(mouth_landmarks, dtype=np.int32)
+        if not mouth_landmarks or len(mouth_landmarks) == 0:
+            print("[API] No mouth landmarks provided")
+            return
+            
+        # Convert landmarks to numpy array and ensure proper shape
+        points = np.array(mouth_landmarks, dtype=np.float32)
         
-        # Create mask from mouth landmarks
-        mask = np.zeros(frame.shape[:2], dtype=np.uint8)
-        cv2.fillPoly(mask, [points], 255)
+        # Handle different landmark formats
+        if points.ndim == 1:
+            # If flattened, reshape to 2D
+            points = points.reshape(-1, 2)
+        elif points.ndim == 2 and points.shape[1] == 3:
+            # If 3D landmarks, take only x,y coordinates
+            points = points[:, :2]
+            
+        # Get bounding rectangle from landmarks
+        x_coords = points[:, 0]
+        y_coords = points[:, 1]
         
-        # Apply strong blur to mouth region
-        blurred = cv2.GaussianBlur(frame, (0, 0), sigmaX=120, sigmaY=120)
+        x_min = int(np.min(x_coords))
+        y_min = int(np.min(y_coords))
+        x_max = int(np.max(x_coords))
+        y_max = int(np.max(y_coords))
         
-        # Blend using mask
-        mask_3d = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR) / 255.0
-        frame[:] = frame * (1 - mask_3d) + blurred * mask_3d
+        # Apply rectangular blur to mouth region
+        apply_strong_mouth_blur(frame, [x_min, y_min, x_max, y_max])
+        
+        print(f"[API] ✅ Applied landmark-based mouth blur: bbox=[{x_min}, {y_min}, {x_max}, {y_max}]")
         
     except Exception as e:
         print(f"[API] Error in landmark mouth blur: {e}")
-        # Fallback to bbox blur if landmarks fail
-        if len(mouth_landmarks) > 0:
-            points = np.array(mouth_landmarks, dtype=np.int32)
-            x_min, y_min = np.min(points, axis=0)
-            x_max, y_max = np.max(points, axis=0)
-            apply_strong_mouth_blur(frame, [x_min, y_min, x_max, y_max])
+        print(f"[API] Landmark data type: {type(mouth_landmarks)}, length: {len(mouth_landmarks) if mouth_landmarks else 0}")
+        # No additional fallback needed - error will be logged
 
 def apply_strong_mouth_blur(frame, mouth_bbox):
     """Strong blur for mouth region using bbox"""
