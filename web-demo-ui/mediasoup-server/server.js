@@ -434,11 +434,21 @@ io.on('connection', socket => {
             console.log(`[AUDIO-SERVER] PII events: ${piiEvents.map(e => `${e.startTime}-${e.endTime}`).join(', ')}`);
             console.log(`[AUDIO-SERVER] PII words: ${piiEvents.map(e => e.words?.join(' ')).join(', ')}`);
             
-            // Store PII events
+            // Store PII events with immediate cleanup of old events
             if (!piiEventsBuffer.has(roomId)) {
               piiEventsBuffer.set(roomId, []);
             }
-            piiEventsBuffer.get(roomId).push(...piiEvents);
+            
+            // Clean up old events before adding new ones (keep only last 10 seconds)
+            const cutoffTime = Date.now() - 10000; // 10 seconds ago
+            const existingEvents = piiEventsBuffer.get(roomId);
+            const cleanedEvents = existingEvents.filter(event => event.endTime > cutoffTime);
+            
+            // Add new events
+            cleanedEvents.push(...piiEvents);
+            piiEventsBuffer.set(roomId, cleanedEvents);
+            
+            console.log(`[AUDIO-SERVER] 🧹 Cleaned up old PII events. Before: ${existingEvents.length}, After: ${cleanedEvents.length}`);
           }
           
           // TRIGGER VIDEO PROCESSING IMMEDIATELY (T+3s+100ms)
@@ -993,24 +1003,33 @@ function getPIIReasonForTimestamp(roomId, videoTimestamp) {
 
 // Cleanup old cached data
 setInterval(() => {
-  const cutoff = Date.now() - 60000; // 1 minute
+  const detectionCutoff = Date.now() - 60000; // 1 minute for detection cache
+  const piiCutoff = Date.now() - 15000; // 15 seconds for PII events (more aggressive)
   
   // Cleanup detection cache
   for (const [frameId, data] of detectionCache.entries()) {
-    if (data.cacheTime < cutoff) {
+    if (data.cacheTime < detectionCutoff) {
       detectionCache.delete(frameId);
     }
   }
   
-  // Cleanup PII events
+  // Cleanup PII events more aggressively
+  let totalPiiBefore = 0;
+  let totalPiiAfter = 0;
+  
   for (const [roomId, events] of piiEventsBuffer.entries()) {
-    piiEventsBuffer.set(roomId, 
-      events.filter(event => event.endTime > cutoff)
-    );
+    totalPiiBefore += events.length;
+    const cleanedEvents = events.filter(event => event.endTime > piiCutoff);
+    totalPiiAfter += cleanedEvents.length;
+    piiEventsBuffer.set(roomId, cleanedEvents);
+    
+    if (events.length !== cleanedEvents.length) {
+      console.log(`[CLEANUP] Room ${roomId}: Removed ${events.length - cleanedEvents.length} old PII events`);
+    }
   }
   
-  console.log(`[CLEANUP] Cache sizes - Detection: ${detectionCache.size}, PII events: ${Array.from(piiEventsBuffer.values()).reduce((sum, arr) => sum + arr.length, 0)}`);
-}, TIMING_CONFIG.CACHE_CLEANUP_INTERVAL);
+  console.log(`[CLEANUP] Cache sizes - Detection: ${detectionCache.size}, PII events: ${totalPiiAfter} (removed ${totalPiiBefore - totalPiiAfter})`);
+}, 5000); // Run cleanup every 5 seconds instead of 30s
 
 app.get('/health', (req, res) => res.json({ status:'healthy', mediasoup:'ready' }));
 
