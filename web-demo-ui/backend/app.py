@@ -11,7 +11,7 @@ load_dotenv()
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
 CORS(app, origins="*")
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', logger=True, engineio_logger=True)
+socketio = SocketIO(app, path='/backend/socket.io', cors_allowed_origins="*", async_mode='threading', logger=True, engineio_logger=True)
 
 # Configuration for Mediasoup server
 MEDIASOUP_SERVER_URL = os.getenv('MEDIASOUP_SERVER_URL', 'http://localhost:3001')

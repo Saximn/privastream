@@ -10,6 +10,7 @@
   "dependencies": {
     "@discordjs/opus": "^0.10.0",
     "cors": "^2.8.5",
+    "dotenv": "^17.2.2",
     "express": "^4.18.2",
     "mediasoup": "^3.12.16",
     "node-fetch": "^2.7.0",

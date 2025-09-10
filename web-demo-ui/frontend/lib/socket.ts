@@ -39,7 +39,7 @@ export class SocketManager {
 
     this.socket = io(serverUrl, {
       transports: ['websocket', 'polling'],
-      path: '/socket.io/'
+      path: '/backend/socket.io'
     })
   }
 

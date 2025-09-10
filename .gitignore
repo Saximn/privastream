@@ -8,3 +8,5 @@ datasets
 
 node_modules/
 *.pem
+__pycache__/
+env/

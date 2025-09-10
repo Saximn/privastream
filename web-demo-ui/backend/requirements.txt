@@ -125,7 +125,6 @@ python-bidi==0.6.6
 python-dateutil==2.9.0.post0
 python-doctr==1.0.0
 pytz==2023.4
-pywin32==311
 PyYAML==6.0.2
 pyzmq==27.0.2
 RapidFuzz==3.14.0

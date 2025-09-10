@@ -99,9 +99,11 @@ export default function Host() {
         }
 
         // SFU socket
+	console.log("roomResponse:", roomResponse);
         setConnectionState("connecting to mediasoup...");
         const sfuUrl = roomResponse.mediasoupUrl || API_CONFIG.SFU_URL;
         sfuSocketRef.current = io(sfuUrl, {
+					path: "/mediasoup/socket.io",
           transports: ["websocket"],
           reconnectionAttempts: 3,
         });
@@ -175,7 +177,6 @@ export default function Host() {
       }
     };
 
-    initializeConnections();
     initializeConnections();
 
     return () => {

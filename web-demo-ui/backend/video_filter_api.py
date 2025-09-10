@@ -32,7 +32,7 @@ app = Flask(__name__)
 CORS(app, origins="*")
 
 # PERFORMANCE CONFIGURATION - Easy to adjust
-DETECTION_FPS = 4.0  # FPS for face/privacy detection (lower = less latency, higher = more CPU load)
+DETECTION_FPS = 30.0  # FPS for face/privacy detection (lower = less latency, higher = more CPU load)
 # Conversion: 30fps input -> stride calculation
 DETECTION_STRIDE = max(1, int(30 / DETECTION_FPS))  # Process every Nth frame
 
@@ -42,9 +42,9 @@ print(f"[CONFIG] Expected detection delay: {EXPECTED_DELAY_SEC:.2f} seconds")
 
 # Detector configuration
 DETECTOR_CONFIG = {
-    "enable_face": False,
+    "enable_face": True,
     "enable_pii": False,
-    "enable_plate": False,
+    "enable_plate": True,
     "pii": {
         "classifier_path": "video_models/pii_blur/pii_clf.joblib",
         "conf_thresh": 0.35
@@ -63,7 +63,7 @@ DEBUG_CONFIG = {
 # Request queue protection configuration
 QUEUE_CONFIG = {
     "max_request_age_ms": 1000,  # Drop requests older than 1 second
-    "max_concurrent_requests": 3,  # Limit concurrent processing to prevent GPU overload
+    "max_concurrent_requests": 15,  # Limit concurrent processing to prevent GPU overload
     "enable_request_dropping": True,  # Enable/disable request age checking
     "queue_monitoring": True  # Enable queue monitoring logs
 }
@@ -844,5 +844,6 @@ if __name__ == '__main__':
     
     # Initialize debug directories on startup
     setup_debug_directories()
+    init_detector()
     
     app.run(host='0.0.0.0', port=5001, debug=False, threaded=True)

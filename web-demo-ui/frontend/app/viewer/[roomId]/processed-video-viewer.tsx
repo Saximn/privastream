@@ -57,6 +57,7 @@ export default function ProcessedVideoViewer() {
         // Connect to SFU server
         console.log("[VIEWER] Connecting to SFU server...");
         sfuSocketRef.current = io(API_CONFIG.SFU_URL, {
+		path:"/mediasoup/socket.io",
           transports: ["websocket"],
           reconnectionAttempts: 3
         }

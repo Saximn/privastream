@@ -9,6 +9,7 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
+require('dotenv').config();
 const API_CONFIG = require('./config').default;
 
 // Try to import node-fetch, fallback to http if needed
@@ -21,8 +22,10 @@ try {
 }
 
 // TIMING CONFIGURATION - Easy to adjust
-const PROCESSING_DELAY_MS = 8000; // Total delay in milliseconds (8000ms = 8 seconds)
+const PROCESSING_DELAY_MS = 6000; // Total delay in milliseconds (8000ms = 8 seconds)
 console.log(`[CONFIG] Video processing delay set to: ${PROCESSING_DELAY_MS}ms (${PROCESSING_DELAY_MS/1000}s)`);
+
+console.log(API_CONFIG);
 
 // Import Audio Redaction Processor
 const { AudioRedactionProcessor } = require('./audio-redaction-processor');
