@@ -413,15 +413,20 @@ io.on('connection', socket => {
           
           // Store PII events if any detected
           if (result.metadata.redacted_intervals?.length > 0) {
+            // TIMING FIX: PII events should be timestamped from when audio was CAPTURED, not when processing completed
+            // Audio chunk represents the PREVIOUS 3 seconds that just finished processing
             const chunkStartTime = Date.now() - TIMING_CONFIG.AUDIO_CHUNK_DURATION;
             
             const piiEvents = result.metadata.redacted_intervals.map(interval => ({
+              // Map PII intervals to the actual time when the audio was captured (not when processed)
               startTime: chunkStartTime + (interval[0] * 1000),
               endTime: chunkStartTime + (interval[1] * 1000),
               confidence: interval.confidence || 1.0,
               words: result.metadata.detected_words || [],
               transcript: result.metadata.transcript || ""
             }));
+            
+            console.log(`[AUDIO-SERVER] 🕐 PII timing: chunk captured ${chunkStartTime} to ${chunkStartTime + TIMING_CONFIG.AUDIO_CHUNK_DURATION}, events: ${piiEvents.map(e => `${e.startTime}-${e.endTime}`).join(', ')}`);
             
             // Store PII events
             if (!piiEventsBuffer.has(roomId)) {
@@ -934,15 +939,36 @@ async function processVideoFrameWithPII(frameId) {
 
 function checkPIIEventsForTimestamp(roomId, videoTimestamp) {
   const piiEvents = piiEventsBuffer.get(roomId) || [];
-  return piiEvents.some(event => 
-    videoTimestamp >= event.startTime && videoTimestamp <= event.endTime
-  );
+  
+  // Add timing tolerance to account for processing delays and frame timing variations
+  const TIMING_TOLERANCE = 500; // 500ms tolerance
+  
+  const matchFound = piiEvents.some(event => {
+    // Check if video frame timestamp falls within PII event time range (with tolerance)
+    const frameInRange = (videoTimestamp >= (event.startTime - TIMING_TOLERANCE)) && 
+                        (videoTimestamp <= (event.endTime + TIMING_TOLERANCE));
+    
+    if (frameInRange) {
+      console.log(`[SYNC] 🎯 Frame ${videoTimestamp} matches PII event ${event.startTime}-${event.endTime} (tolerance: ±${TIMING_TOLERANCE}ms)`);
+    }
+    
+    return frameInRange;
+  });
+  
+  if (!matchFound && piiEvents.length > 0) {
+    console.log(`[SYNC] ❌ Frame ${videoTimestamp} no match. Available PII events: ${piiEvents.map(e => `${e.startTime}-${e.endTime}`).join(', ')}`);
+  }
+  
+  return matchFound;
 }
 
 function getPIIReasonForTimestamp(roomId, videoTimestamp) {
   const piiEvents = piiEventsBuffer.get(roomId) || [];
+  const TIMING_TOLERANCE = 500; // Same tolerance as checkPIIEventsForTimestamp
+  
   const matchingEvent = piiEvents.find(event => 
-    videoTimestamp >= event.startTime && videoTimestamp <= event.endTime
+    (videoTimestamp >= (event.startTime - TIMING_TOLERANCE)) && 
+    (videoTimestamp <= (event.endTime + TIMING_TOLERANCE))
   );
   
   if (matchingEvent) {
