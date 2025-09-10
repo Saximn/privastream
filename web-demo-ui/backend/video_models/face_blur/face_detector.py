@@ -329,6 +329,179 @@ class FaceDetector:
         
         return frame_id, rectangles
     
+    def extract_mouth_landmarks_buffalo(self, faces: List) -> List[Dict]:
+        """
+        Extract precise mouth coordinates using Buffalo's 68-point landmarks.
+        Points 49-68 define outer and inner lips.
+        """
+        mouth_regions = []
+        
+        for i, face in enumerate(faces):
+            try:
+                # Check if Buffalo provides landmarks
+                if hasattr(face, 'landmark_3d_68') and face.landmark_3d_68 is not None:
+                    landmarks = face.landmark_3d_68
+                    
+                    # Mouth points: 49-68 (20 points total)
+                    # Outer lip: points 49-60 (12 points)
+                    # Inner lip: points 61-68 (8 points)
+                    mouth_points = landmarks[48:68]  # 0-indexed: 48-67 = points 49-68
+                    
+                    # Get bounding box of mouth region
+                    mouth_x = mouth_points[:, 0]
+                    mouth_y = mouth_points[:, 1]
+                    
+                    x_min, x_max = np.min(mouth_x), np.max(mouth_x)
+                    y_min, y_max = np.min(mouth_y), np.max(mouth_y)
+                    
+                    # Add padding for better coverage
+                    padding = 8  # pixels
+                    mouth_bbox = [
+                        max(0, int(x_min - padding)),
+                        max(0, int(y_min - padding)),
+                        int(x_max + padding),
+                        int(y_max + padding)
+                    ]
+                    
+                    mouth_regions.append({
+                        'face_index': i,
+                        'bbox': mouth_bbox,
+                        'landmarks': mouth_points.tolist(),  # Full landmark points
+                        'confidence': float(face.det_score) if hasattr(face, 'det_score') else 1.0
+                    })
+                    
+                    print(f"[FaceDetector] Extracted Buffalo mouth landmarks for face {i}: bbox={mouth_bbox}")
+                    
+                else:
+                    # Fallback: estimate mouth region from face bbox
+                    face_bbox = face.bbox
+                    mouth_bbox = self._estimate_mouth_from_face(face_bbox)
+                    
+                    mouth_regions.append({
+                        'face_index': i,
+                        'bbox': mouth_bbox,
+                        'landmarks': None,
+                        'confidence': float(face.det_score) if hasattr(face, 'det_score') else 0.5
+                    })
+                    
+                    print(f"[FaceDetector] Fallback mouth estimation for face {i}: bbox={mouth_bbox}")
+                    
+            except Exception as e:
+                print(f"[FaceDetector] Error extracting mouth for face {i}: {e}")
+                continue
+        
+        return mouth_regions
+
+    def _estimate_mouth_from_face(self, face_bbox) -> List[int]:
+        """Fallback mouth estimation when landmarks unavailable"""
+        x1, y1, x2, y2 = map(int, face_bbox)
+        face_width = x2 - x1
+        face_height = y2 - y1
+        
+        # Mouth is typically in bottom 1/3 of face, center 60% width
+        mouth_x1 = x1 + int(face_width * 0.2)   # 20% from left
+        mouth_x2 = x2 - int(face_width * 0.2)   # 20% from right
+        mouth_y1 = y1 + int(face_height * 0.7)  # 70% from top
+        mouth_y2 = y1 + int(face_height * 0.9)  # 90% from top
+        
+        return [mouth_x1, mouth_y1, mouth_x2, mouth_y2]
+
+    def process_frame_with_mouth_landmarks(self, frame: np.ndarray, frame_id: int, 
+                                         stride: int = 1) -> Tuple[int, List[List[int]], List[Dict]]:
+        """
+        Enhanced frame processing that returns both face blur regions and mouth landmarks.
+        """
+        H, W = frame.shape[:2]
+        frame_for_det = self.enhance_lowlight(frame)
+        
+        if self.panic_mode:
+            return frame_id, [[0, 0, W-1, H-1]], []
+        
+        # Get faces with full InsightFace data
+        faces = self.app.get(frame_for_det)
+        face_boxes = [list(map(float, f.bbox)) for f in faces]
+        
+        # Extract mouth landmarks for ALL detected faces
+        mouth_regions = self.extract_mouth_landmarks_buffalo(faces)
+        
+        # Existing whitelist logic for face blurring
+        now = time.monotonic()
+        new_boxes = []
+        creator_matches = set()
+        
+        if self.creator_embedding is not None and len(faces) > 0:
+            # Get the 3 largest faces for whitelist checking only
+            face_areas = []
+            for i, (face, box) in enumerate(zip(faces, face_boxes)):
+                x1, y1, x2, y2 = box
+                area = (x2 - x1) * (y2 - y1)
+                face_areas.append((area, i, face, box))
+            
+            # Sort by area (largest first) and take top 3
+            face_areas.sort(reverse=True)
+            top_faces = face_areas[:3]
+            
+            print(f"[FaceDetector] Processing {len(top_faces)} largest faces for creator matching (out of {len(faces)} total)...")
+            
+            for area, i, face, box in top_faces:
+                try:
+                    # Check if face has embedding
+                    if not hasattr(face, 'normed_embedding') or face.normed_embedding is None:
+                        continue
+                        
+                    # Validate embedding shape
+                    if len(face.normed_embedding.shape) != 1 or face.normed_embedding.shape[0] == 0:
+                        continue
+                    
+                    # Calculate distance
+                    distance = self.cosine_distance(self.creator_embedding, face.normed_embedding)
+                    match = distance <= self.threshold
+                    
+                    if match:
+                        creator_matches.add(i)
+                        print(f"[FaceDetector] Face {i} MATCHES creator (distance: {distance:.3f}, area: {area:.0f})")
+                    else:
+                        print(f"[FaceDetector] Face {i} does NOT match (distance: {distance:.3f}, area: {area:.0f})")
+                        
+                except Exception as e:
+                    print(f"[FaceDetector] Error processing face {i}: {e}")
+                    continue
+            
+            # Update temporal voting with whether ANY face matched
+            any_match = len(creator_matches) > 0
+            self.vote_buf.append(any_match)
+            
+            # Voting logic
+            vote_count = sum(self.vote_buf)
+            buffer_size = len(self.vote_buf)
+            
+            if buffer_size < 3:
+                creator_allowed = vote_count >= max(1, buffer_size // 2)
+            else:
+                creator_allowed = vote_count >= 2
+            
+            print(f"[FaceDetector] Temporal voting: {vote_count}/{buffer_size} frames matched")
+        else:
+            creator_allowed = False
+            print(f"[FaceDetector] No creator embedding available")
+        
+        # Decide which faces to blur
+        for i, box in enumerate(face_boxes):
+            if creator_allowed and i in creator_matches:
+                print(f"[FaceDetector] Face {i} whitelisted (creator match)")
+            else:
+                new_boxes.append(self.dilate_box(box, W, H))
+                print(f"[FaceDetector] Face {i} will be blurred")
+        
+        # Temporal smoothing for face regions
+        expiry = now + self.smooth_ms / 1000.0
+        self.masks = [m for m in self.masks if m[0] > now] + [(expiry, b) for b in new_boxes]
+        rectangles = [box for _, box in self.masks]
+        
+        print(f"[FaceDetector] Frame {frame_id}: faces={len(faces)}, mouths={len(mouth_regions)}, blur_regions={len(rectangles)}")
+        
+        return frame_id, rectangles, mouth_regions
+
     def get_model_info(self) -> Dict[str, Any]:
         """Get information about the current model configuration."""
         return {

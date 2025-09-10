@@ -22,8 +22,23 @@ try {
 }
 
 // TIMING CONFIGURATION - Easy to adjust
-const PROCESSING_DELAY_MS = 6000; // Total delay in milliseconds (8000ms = 8 seconds)
-console.log(`[CONFIG] Video processing delay set to: ${PROCESSING_DELAY_MS}ms (${PROCESSING_DELAY_MS/1000}s)`);
+const TIMING_CONFIG = {
+  AUDIO_CHUNK_DURATION: 3000,      // Audio processing takes 3s
+  TOTAL_VIEWER_DELAY: 8000,        // Configurable total delay (can change to 5s later)
+  PROCESSING_BUFFER: 100,          // Small buffer after audio completes (100ms)
+  CACHE_CLEANUP_INTERVAL: 30000    // Cleanup every 30s
+};
+
+// Calculate when to deliver based on original capture time
+function calculateDeliveryDelay(originalTimestamp) {
+  const targetDeliveryTime = originalTimestamp + TIMING_CONFIG.TOTAL_VIEWER_DELAY;
+  const currentTime = Date.now();
+  return Math.max(0, targetDeliveryTime - currentTime);
+}
+
+console.log(`[CONFIG] Audio processing: ${TIMING_CONFIG.AUDIO_CHUNK_DURATION}ms`);
+console.log(`[CONFIG] Total viewer delay: ${TIMING_CONFIG.TOTAL_VIEWER_DELAY}ms`);
+console.log(`[CONFIG] Video processing triggers: T+${TIMING_CONFIG.AUDIO_CHUNK_DURATION + TIMING_CONFIG.PROCESSING_BUFFER}ms`);
 
 console.log(API_CONFIG);
 
@@ -78,6 +93,11 @@ const producers = new Map();      // producerId -> producer
 const consumers = new Map();      // consumerId -> consumer
 const processedProducers = new Map(); // originalProducerId -> processedProducerId
 const frameProcessingState = new Map(); // roomId -> { frameCount, lastDetection, lastProcessedFrame }
+
+// Enhanced caches for mouth blurring coordination
+const detectionCache = new Map();     // frameId -> detection results
+const piiEventsBuffer = new Map();    // roomId -> PII events array  
+const frameAudioMapping = new Map();  // roomId -> {pendingFrames: [frameId], audioChunkCount}
 
 // Frame buffer for video filters
 const frameBuffer = new Map(); // roomId -> [{frame, timestamp}]
@@ -371,39 +391,41 @@ io.on('connection', socket => {
         
         console.log(`[AUDIO-SERVER] 🎤 Received audio data for room ${roomId}:`, audioBuffer.length, 'bytes');
         
-        // Track audio chunk start time (when first data for new chunk arrives)
-        const chunkStartTimes = audioChunkStartTimes.get(roomId) || [];
-        const currentTime = Date.now();
-        
         // Process audio through redaction service
         const result = await audioRedactionProcessor.addAudioChunk(roomId, audioBuffer);
         
         if (result && result.success) {
-          // A 3-second chunk just completed - record when it started and calculate delay
-          const chunkStartTime = currentTime - 3000; // Estimate: chunk started 3 seconds ago
-          chunkStartTimes.push(chunkStartTime);
-          audioChunkStartTimes.set(roomId, chunkStartTimes);
+          console.log('[AUDIO-SERVER] ✅ Audio chunk completed, triggering video processing');
           
-          console.log('[AUDIO-SERVER] ✅ Audio processed successfully, sending to viewers');
-          console.log('[AUDIO-SERVER] 🎤 Processed audio metadata:', {
-            piiCount: result.metadata?.pii_count || 0,
-            processingTime: result.metadata?.processing_time || 0,
-            transcript: result.metadata?.transcript ? result.metadata.transcript.substring(0, 50) + '...' : 'empty'
-          });
+          // Store PII events if any detected
+          if (result.metadata.redacted_intervals?.length > 0) {
+            const chunkStartTime = Date.now() - TIMING_CONFIG.AUDIO_CHUNK_DURATION;
+            
+            const piiEvents = result.metadata.redacted_intervals.map(interval => ({
+              startTime: chunkStartTime + (interval[0] * 1000),
+              endTime: chunkStartTime + (interval[1] * 1000),
+              confidence: interval.confidence || 1.0,
+              words: result.metadata.detected_words || [],
+              transcript: result.metadata.transcript || ""
+            }));
+            
+            // Store PII events
+            if (!piiEventsBuffer.has(roomId)) {
+              piiEventsBuffer.set(roomId, []);
+            }
+            piiEventsBuffer.get(roomId).push(...piiEvents);
+            
+            console.log(`[AUDIO-SERVER] 📝 Stored ${piiEvents.length} PII events: ${piiEvents.map(e => e.words?.join(' ')).join(', ')}`);
+          }
           
-          // CONTEXT-ONLY SLIDING WINDOW: Previous chunk is used only for ASR context,
-          // current chunk timing is unaffected since we only output the current portion
-          const effectiveChunkStartTime = chunkStartTime;
+          // TRIGGER VIDEO PROCESSING IMMEDIATELY (T+3s+100ms)
+          setTimeout(() => {
+            processFramesForCompletedAudio(roomId);
+          }, TIMING_CONFIG.PROCESSING_BUFFER);
           
-          // Calculate delay to achieve total processing delay (5s buffer + 3s processing)
-          const targetOutputTime = effectiveChunkStartTime + PROCESSING_DELAY_MS;
-          const delayNeeded = Math.max(0, targetOutputTime - Date.now());
-          
-          console.log('[AUDIO-SERVER] 🕐 Context-only sliding window timing:', {
-            chunkStartTime: chunkStartTime,
-            effectiveChunkStart: effectiveChunkStartTime,
-            delayNeeded: delayNeeded
-          });
+          // Send processed audio to viewers
+          const chunkStartTime = Date.now() - TIMING_CONFIG.AUDIO_CHUNK_DURATION;
+          const deliveryDelay = calculateDeliveryDelay(chunkStartTime);
           
           setTimeout(() => {
             const room = rooms.get(roomId);
@@ -415,9 +437,10 @@ io.on('connection', socket => {
                   timestamp: Date.now()
                 });
               });
-              console.log('[AUDIO-SERVER] 📤 Sent audio with', delayNeeded, 'ms delay (8s total from chunk start) to', room.viewers.size, 'viewers');
+              console.log(`[AUDIO-SERVER] 📤 Delivered audio to ${room.viewers.size} viewers (delay: ${deliveryDelay}ms)`);
             }
-          }, delayNeeded); // Dynamic delay to achieve 8 seconds total from chunk start
+          }, deliveryDelay);
+          
         } else {
           console.log('[AUDIO-SERVER] ⚠️ Audio processing failed or not ready yet');
         }
@@ -534,11 +557,11 @@ io.on('connection', socket => {
           // Track if we've notified viewers about streaming start
           let hasNotifiedViewers = false;
           
-          // Set up real video frame processing handler
+          // Set up real video frame processing handler with mouth blur coordination
           socket.on('video-frame', async (data) => {
             try {
               const { roomId, frame, frameId, timestamp } = data;
-              console.log('[VIDEO-SERVER] 📸 Received real video frame for room:', roomId, 'frameId:', frameId, 'frame size:', frame?.length);
+              console.log('[VIDEO-SERVER] 🎯 Fast detection for frame', frameId, 'room:', roomId);
               
               // Notify viewers on first frame that host is streaming
               if (!hasNotifiedViewers) {
@@ -555,89 +578,53 @@ io.on('connection', socket => {
                 hasNotifiedViewers = true;
               }
               
-              // Get or initialize frame count
-              if (!frameProcessingState.has(roomId)) {
-                frameProcessingState.set(roomId, { frameCount: 0 });
-              }
-              const state = frameProcessingState.get(roomId);
-              state.frameCount++;
-              
-              // Process frame through WebRTC video processor
               if (!frame) {
                 console.error('[VIDEO-SERVER] ❌ No frame data found');
                 return;
               }
               
-              console.log(`[VIDEO-SERVER] 🎯 Processing frame ${state.frameCount} for room ${roomId} (every 15th: ${state.frameCount % 15 === 1})`);
-              
-              // Process frame through Python detection service (DIRECT CALL - like working version)
-              console.log('[VIDEO-SERVER] 📡 Calling Python detection service directly...');
-              const response = await fetch(`${API_CONFIG.VIDEO_API_URL}/process-frame`, {
+              // STAGE 1: Immediate detection (T+0ms)
+              const detectionResult = await fetch(`${API_CONFIG.VIDEO_API_URL}/detect-faces-mouths`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
-                  frame: frame, // Host already sends full data:image/jpeg;base64, URL
-                  detect_only: true,
-                  frame_id: state.frameCount,
-                  timestamp: timestamp || Date.now(),  // Add timestamp for request age validation
-                  room_id: roomId  // Pass the room ID for whitelist lookup
+                  frame: frame,
+                  frame_id: frameId,
+                  room_id: roomId
                 }),
-                timeout: 5000
+                timeout: 2000
               });
               
-              if (response.ok) {
-                const result = await response.json();
+              if (detectionResult.ok) {
+                const result = await detectionResult.json();
                 
-                // Check if request was dropped by Python API
-                if (result.dropped) {
-                  console.log(`[VIDEO-SERVER] 🗑️ Request dropped by Python API: ${result.reason} - Frame ${frameId}`);
-                  return; // Don't send anything to viewers
-                }
-                
-                console.log('[VIDEO-SERVER] ✅ Python service responded successfully:', {
-                  rectangles: result.rectangles?.length || 0,
-                  frame: result.frame ? 'received' : 'missing'
+                // Cache detection results with original timestamp
+                detectionCache.set(frameId, {
+                  face_blur_regions: result.face_blur_regions || [],
+                  mouth_regions: result.mouth_regions || [],
+                  originalFrame: frame,
+                  captureTimestamp: timestamp,  // Original capture time
+                  roomId: roomId,
+                  cacheTime: Date.now()
                 });
                 
-                // Calculate delay based on capture time to achieve total processing delay from capture
-                const captureTime = timestamp || Date.now();
-                const targetOutputTime = captureTime + PROCESSING_DELAY_MS; // Total delay from when media was captured
-                const currentTime = Date.now();
-                const delayNeeded = Math.max(0, targetOutputTime - currentTime);
-                
-                setTimeout(() => {
-                  const room = rooms.get(roomId);
-                  if (room && room.viewers.size > 0) {
-                    room.viewers.forEach(viewerId => {
-                      io.to(viewerId).emit('processed-video-frame', {
-                        frame: result.frame,
-                        frameId: frameId,
-                        boundingBoxCount: result.rectangles?.length || 0,
-                        wasDetectionFrame: true,
-                        timestamp: timestamp
-                      });
-                    });
-                    console.log('[VIDEO-SERVER] 📤 Sent video frame with', delayNeeded, 'ms delay (8s total from capture) to', room.viewers.size, 'viewers');
-                  }
-                }, delayNeeded); // Dynamic delay to achieve 8 seconds total from capture
-              } else {
-                // Handle dropped requests (429, 503) vs actual errors
-                if (response.status === 429) {
-                  console.log(`[VIDEO-SERVER] 🗑️ Request too old - Frame ${frameId} dropped by Python API`);
-                } else if (response.status === 503) {
-                  console.log(`[VIDEO-SERVER] 🚫 Server overloaded - Frame ${frameId} dropped by Python API`);
-                } else {
-                  console.log('[VIDEO-SERVER] ❌ Python service error:', response.status);
+                // Track frames waiting for PII analysis
+                if (!frameAudioMapping.has(roomId)) {
+                  frameAudioMapping.set(roomId, {
+                    pendingFrames: [],
+                    audioChunkCount: 0
+                  });
                 }
-                console.log('[VIDEO-SERVER] 🔒 PRIVACY PROTECTION: Dropping frame instead of sending unprocessed video');
+                frameAudioMapping.get(roomId).pendingFrames.push(frameId);
                 
-                // PRIVACY FIX: Drop the frame entirely instead of sending unprocessed video
-                // This ensures viewers NEVER see raw/unprocessed content
-                // Better to have gaps in video than to leak private information
+                console.log(`[VIDEO-SERVER] 📦 Cached frame ${frameId}: ${result.total_faces} faces, ${result.mouth_regions?.length || 0} mouths. Pending: ${frameAudioMapping.get(roomId).pendingFrames.length}`);
+                
+              } else {
+                console.warn('[VIDEO-SERVER] ⚠️ Detection failed for frame', frameId, '- Status:', detectionResult.status);
               }
               
             } catch (error) {
-              console.error('[VIDEO-SERVER] ❌ Video frame processing error:', error);
+              console.error('[VIDEO-SERVER] ❌ Detection error:', error);
             }
           });
           
@@ -838,7 +825,167 @@ io.on('connection', socket => {
   });
 });
 
+// Event-driven video processing functions
+async function processFramesForCompletedAudio(roomId) {
+  const mapping = frameAudioMapping.get(roomId);
+  if (!mapping || mapping.pendingFrames.length === 0) {
+    console.log(`[VIDEO-SERVER] 📭 No pending frames for room ${roomId}`);
+    return;
+  }
+  
+  const framesToProcess = [...mapping.pendingFrames];
+  mapping.pendingFrames = []; // Clear pending list
+  mapping.audioChunkCount++;
+  
+  console.log(`[VIDEO-SERVER] 🎬 Processing ${framesToProcess.length} frames for audio chunk ${mapping.audioChunkCount}`);
+  
+  // Process all frames that were waiting for this audio analysis
+  for (const frameId of framesToProcess) {
+    await processVideoFrameWithPII(frameId);
+  }
+}
+
+async function processVideoFrameWithPII(frameId) {
+  const cached = detectionCache.get(frameId);
+  if (!cached) {
+    console.warn('[VIDEO-SERVER] ⚠️ No cached data for frame', frameId);
+    return;
+  }
+  
+  const { face_blur_regions, mouth_regions, originalFrame, captureTimestamp, roomId } = cached;
+  
+  // Check PII events for this frame's timestamp
+  const shouldBlurMouths = checkPIIEventsForTimestamp(roomId, captureTimestamp);
+  const piiReason = shouldBlurMouths ? getPIIReasonForTimestamp(roomId, captureTimestamp) : null;
+  
+  console.log(`[VIDEO-SERVER] 🎭 Processing frame ${frameId} (captured at ${captureTimestamp})`);
+  console.log(`[VIDEO-SERVER] 👄 Mouth blur: ${shouldBlurMouths}${piiReason ? ` (${piiReason.words?.join(',')})` : ''}`);
+  
+  try {
+    // Apply conditional blurring
+    const blurResult = await fetch(`${API_CONFIG.VIDEO_API_URL}/apply-conditional-blur`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        frame: originalFrame,
+        face_blur_regions: face_blur_regions,
+        mouth_regions: mouth_regions,
+        blur_mouths: shouldBlurMouths,
+        blur_mode: shouldBlurMouths ? 'faces_and_mouths' : 'faces_only',
+        pii_reason: piiReason
+      }),
+      timeout: 3000
+    });
+    
+    if (blurResult.ok) {
+      const result = await blurResult.json();
+      
+      // Calculate delivery delay based on ORIGINAL capture time
+      const deliveryDelay = calculateDeliveryDelay(captureTimestamp);
+      
+      console.log(`[VIDEO-SERVER] ⏰ Frame ${frameId} will be delivered in ${deliveryDelay}ms (total delay: ${TIMING_CONFIG.TOTAL_VIEWER_DELAY}ms)`);
+      
+      setTimeout(() => {
+        // Deliver to viewers
+        const room = rooms.get(roomId);
+        if (room && room.viewers.size > 0) {
+          room.viewers.forEach(viewerId => {
+            io.to(viewerId).emit('processed-video-frame', {
+              frame: result.processed_frame,
+              frameId: frameId,
+              facesBlurred: result.faces_blurred,
+              mouthsBlurred: result.mouths_blurred,
+              piiTriggered: shouldBlurMouths,
+              piiReason: piiReason?.words || null,
+              captureTimestamp: captureTimestamp,
+              deliveryTimestamp: Date.now() + deliveryDelay
+            });
+          });
+          
+          console.log(`[VIDEO-SERVER] 📤 Delivered frame ${frameId} to ${room.viewers.size} viewers (faces: ${result.faces_blurred}, mouths: ${result.mouths_blurred})`);
+        }
+      }, deliveryDelay);
+      
+    } else {
+      console.error('[VIDEO-SERVER] ❌ Blur processing failed for frame', frameId, '- Status:', blurResult.status);
+    }
+    
+  } catch (error) {
+    console.error('[VIDEO-SERVER] ❌ PII processing error:', error);
+  } finally {
+    // Cleanup cache
+    detectionCache.delete(frameId);
+  }
+}
+
+function checkPIIEventsForTimestamp(roomId, videoTimestamp) {
+  const piiEvents = piiEventsBuffer.get(roomId) || [];
+  return piiEvents.some(event => 
+    videoTimestamp >= event.startTime && videoTimestamp <= event.endTime
+  );
+}
+
+function getPIIReasonForTimestamp(roomId, videoTimestamp) {
+  const piiEvents = piiEventsBuffer.get(roomId) || [];
+  const matchingEvent = piiEvents.find(event => 
+    videoTimestamp >= event.startTime && videoTimestamp <= event.endTime
+  );
+  
+  if (matchingEvent) {
+    return {
+      words: matchingEvent.words,
+      transcript: matchingEvent.transcript,
+      confidence: matchingEvent.confidence,
+      timeRange: `${matchingEvent.startTime}-${matchingEvent.endTime}`
+    };
+  }
+  return null;
+}
+
+// Cleanup old cached data
+setInterval(() => {
+  const cutoff = Date.now() - 60000; // 1 minute
+  
+  // Cleanup detection cache
+  for (const [frameId, data] of detectionCache.entries()) {
+    if (data.cacheTime < cutoff) {
+      detectionCache.delete(frameId);
+    }
+  }
+  
+  // Cleanup PII events
+  for (const [roomId, events] of piiEventsBuffer.entries()) {
+    piiEventsBuffer.set(roomId, 
+      events.filter(event => event.endTime > cutoff)
+    );
+  }
+  
+  console.log(`[CLEANUP] Cache sizes - Detection: ${detectionCache.size}, PII events: ${Array.from(piiEventsBuffer.values()).reduce((sum, arr) => sum + arr.length, 0)}`);
+}, TIMING_CONFIG.CACHE_CLEANUP_INTERVAL);
+
 app.get('/health', (req, res) => res.json({ status:'healthy', mediasoup:'ready' }));
+
+// Timing configuration endpoints
+app.get('/timing-config', (req, res) => {
+  res.json({
+    audioChunkDuration: TIMING_CONFIG.AUDIO_CHUNK_DURATION,
+    totalViewerDelay: TIMING_CONFIG.TOTAL_VIEWER_DELAY,
+    processingBuffer: TIMING_CONFIG.PROCESSING_BUFFER,
+    videoProcessingTrigger: TIMING_CONFIG.AUDIO_CHUNK_DURATION + TIMING_CONFIG.PROCESSING_BUFFER,
+    currentTime: Date.now()
+  });
+});
+
+app.post('/set-delay', (req, res) => {
+  const { delay } = req.body;
+  if (delay && delay >= 3000 && delay <= 15000) {
+    TIMING_CONFIG.TOTAL_VIEWER_DELAY = delay;
+    console.log(`[CONFIG] Updated total viewer delay to ${delay}ms`);
+    res.json({ success: true, newDelay: delay });
+  } else {
+    res.json({ success: false, error: 'Invalid delay (must be 3-15 seconds)' });
+  }
+});
 
 const PORT = process.env.PORT || 3001;
 init().then(() => server.listen(PORT, () => console.log(`Server running on port ${PORT}`)));

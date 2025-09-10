@@ -801,6 +801,173 @@ def cleanup_room(room_id: str):
             'error': f'Cleanup failed: {str(e)}'
         }), 500
 
+@app.route('/detect-faces-mouths', methods=['POST'])
+def detect_faces_and_mouths():
+    """Fast face + mouth landmark detection for immediate caching"""
+    try:
+        data = request.get_json()
+        if not data or 'frame' not in data:
+            return jsonify({"error": "Missing frame data"}), 400
+
+        frame_data = data['frame']
+        frame_id = data.get('frame_id', 0)
+        room_id = data.get('room_id', None)
+        
+        # Decode frame
+        if frame_data.startswith('data:image'):
+            frame_data = frame_data.split(',')[1]
+        img_bytes = base64.b64decode(frame_data)
+        img_array = np.frombuffer(img_bytes, dtype=np.uint8)
+        frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+        
+        if frame is None:
+            return jsonify({"error": "Invalid image data"}), 400
+        
+        # Initialize detector if needed
+        if detector is None:
+            init_detector()
+        if detector == "failed":
+            return jsonify({"error": "Detector not available"}), 500
+            
+        # Get face blur regions and mouth landmarks
+        start_time = time.time()
+        frame_id_result, face_blur_regions, mouth_regions = detector.process_frame_with_mouth_landmarks(
+            frame, frame_id, stride=1
+        )
+        detection_time = time.time() - start_time
+        
+        return jsonify({
+            "success": True,
+            "frame_id": frame_id,
+            "face_blur_regions": face_blur_regions,
+            "mouth_regions": mouth_regions,
+            "detection_time": detection_time,
+            "total_faces": len(mouth_regions),
+            "faces_to_blur": len(face_blur_regions)
+        })
+        
+    except Exception as e:
+        print(f"[API] Fast detection error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/apply-conditional-blur', methods=['POST'])  
+def apply_conditional_blur():
+    """Apply face blur + conditional mouth blur based on PII events"""
+    try:
+        data = request.get_json()
+        if not data or 'frame' not in data:
+            return jsonify({"error": "Missing frame data"}), 400
+
+        frame_data = data['frame']
+        face_blur_regions = data.get('face_blur_regions', [])
+        mouth_regions = data.get('mouth_regions', [])
+        blur_mouths = data.get('blur_mouths', False)
+        blur_mode = data.get('blur_mode', 'faces_only')
+        pii_reason = data.get('pii_reason', None)
+        
+        # Decode frame
+        if frame_data.startswith('data:image'):
+            frame_data = frame_data.split(',')[1]
+        img_bytes = base64.b64decode(frame_data)
+        img_array = np.frombuffer(img_bytes, dtype=np.uint8)
+        frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+        
+        if frame is None:
+            return jsonify({"error": "Invalid image data"}), 400
+        
+        # Apply face blurring (always - privacy protection)
+        faces_blurred = 0
+        for region in face_blur_regions:
+            apply_gaussian_blur_region(frame, region)
+            faces_blurred += 1
+        
+        # Apply mouth blurring (conditional - PII protection)
+        mouths_blurred = 0
+        if blur_mouths and mouth_regions:
+            print(f"[API] 👄 Applying mouth blur to {len(mouth_regions)} mouths due to PII: {pii_reason}")
+            for mouth_data in mouth_regions:
+                mouth_bbox = mouth_data['bbox']
+                if mouth_data.get('landmarks'):
+                    # Use precise landmarks for better blur
+                    apply_landmark_mouth_blur(frame, mouth_data['landmarks'])
+                else:
+                    # Use bbox fallback
+                    apply_strong_mouth_blur(frame, mouth_bbox)
+                mouths_blurred += 1
+                
+        # Encode result
+        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        frame_b64 = base64.b64encode(buffer).decode('utf-8')
+        frame_b64 = f"data:image/jpeg;base64,{frame_b64}"
+        
+        return jsonify({
+            "success": True,
+            "processed_frame": frame_b64,
+            "faces_blurred": faces_blurred,
+            "mouths_blurred": mouths_blurred,
+            "blur_mode": blur_mode,
+            "pii_triggered": blur_mouths
+        })
+        
+    except Exception as e:
+        print(f"[API] Conditional blur error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+def apply_gaussian_blur_region(frame, region):
+    """Apply Gaussian blur to a specific region"""
+    x1, y1, x2, y2 = map(int, region)
+    h, w = frame.shape[:2]
+    
+    # Bounds check
+    x1, y1 = max(0, x1), max(0, y1)
+    x2, y2 = min(w, x2), min(h, y2)
+    
+    if x2 > x1 and y2 > y1:
+        roi = frame[y1:y2, x1:x2]
+        if roi.size > 0:
+            frame[y1:y2, x1:x2] = cv2.GaussianBlur(roi, (0, 0), sigmaX=75, sigmaY=75)
+
+def apply_landmark_mouth_blur(frame, mouth_landmarks):
+    """Apply blur using precise mouth landmarks"""
+    try:
+        points = np.array(mouth_landmarks, dtype=np.int32)
+        
+        # Create mask from mouth landmarks
+        mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+        cv2.fillPoly(mask, [points], 255)
+        
+        # Apply strong blur to mouth region
+        blurred = cv2.GaussianBlur(frame, (0, 0), sigmaX=120, sigmaY=120)
+        
+        # Blend using mask
+        mask_3d = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR) / 255.0
+        frame[:] = frame * (1 - mask_3d) + blurred * mask_3d
+        
+    except Exception as e:
+        print(f"[API] Error in landmark mouth blur: {e}")
+        # Fallback to bbox blur if landmarks fail
+        if len(mouth_landmarks) > 0:
+            points = np.array(mouth_landmarks, dtype=np.int32)
+            x_min, y_min = np.min(points, axis=0)
+            x_max, y_max = np.max(points, axis=0)
+            apply_strong_mouth_blur(frame, [x_min, y_min, x_max, y_max])
+
+def apply_strong_mouth_blur(frame, mouth_bbox):
+    """Strong blur for mouth region using bbox"""
+    x1, y1, x2, y2 = map(int, mouth_bbox)
+    h, w = frame.shape[:2]
+    
+    # Bounds check
+    x1, y1 = max(0, x1), max(0, y1) 
+    x2, y2 = min(w, x2), min(h, y2)
+    
+    if x2 > x1 and y2 > y1:
+        roi = frame[y1:y2, x1:x2]
+        if roi.size > 0:
+            # Very strong blur for mouth (higher than face blur)
+            blurred = cv2.GaussianBlur(roi, (0, 0), sigmaX=150, sigmaY=150)
+            frame[y1:y2, x1:x2] = blurred
+
 @app.route('/transfer-embedding', methods=['POST'])
 def transfer_embedding():
     """Transfer face embedding from enrollment room to streaming room."""
