@@ -354,8 +354,8 @@ class FaceDetector:
                     x_min, x_max = np.min(mouth_x), np.max(mouth_x)
                     y_min, y_max = np.min(mouth_y), np.max(mouth_y)
                     
-                    # Add padding for better coverage
-                    padding = 8  # pixels
+                    # Add padding for better coverage - increased for larger blur area
+                    padding = 20  # pixels (increased from 8 to 20)
                     mouth_bbox = [
                         max(0, int(x_min - padding)),
                         max(0, int(y_min - padding)),
@@ -398,11 +398,11 @@ class FaceDetector:
         face_width = x2 - x1
         face_height = y2 - y1
         
-        # Mouth is typically in bottom 1/3 of face, center 60% width
-        mouth_x1 = x1 + int(face_width * 0.2)   # 20% from left
-        mouth_x2 = x2 - int(face_width * 0.2)   # 20% from right
-        mouth_y1 = y1 + int(face_height * 0.7)  # 70% from top
-        mouth_y2 = y1 + int(face_height * 0.9)  # 90% from top
+        # Mouth is typically in bottom 1/3 of face, center 70% width (increased for larger area)
+        mouth_x1 = x1 + int(face_width * 0.15)   # 15% from left (was 20%)
+        mouth_x2 = x2 - int(face_width * 0.15)   # 15% from right (was 20%)
+        mouth_y1 = y1 + int(face_height * 0.65)  # 65% from top (was 70%)
+        mouth_y2 = y1 + int(face_height * 0.95)  # 95% from top (was 90%)
         
         return [mouth_x1, mouth_y1, mouth_x2, mouth_y2]
 

@@ -409,32 +409,36 @@ io.on('connection', socket => {
         const result = await audioRedactionProcessor.addAudioChunk(roomId, audioBuffer);
         
         if (result && result.success) {
+          const processingCompleteTime = Date.now();
           console.log('[AUDIO-SERVER] ✅ Audio chunk completed, triggering video processing');
           
           // Store PII events if any detected
           if (result.metadata.redacted_intervals?.length > 0) {
-            // TIMING FIX: PII events should be timestamped from when audio was CAPTURED, not when processing completed
-            // Audio chunk represents the PREVIOUS 3 seconds that just finished processing
-            const chunkStartTime = Date.now() - TIMING_CONFIG.AUDIO_CHUNK_DURATION;
+            // TIMING FIX: Audio chunks are processed with sliding window
+            // The audio we just processed was captured roughly 3-6 seconds ago
+            // Let's use a more aggressive timing adjustment to match video frames
+            const estimatedCaptureTime = processingCompleteTime - (TIMING_CONFIG.AUDIO_CHUNK_DURATION * 1.5); // 4.5 seconds ago
             
             const piiEvents = result.metadata.redacted_intervals.map(interval => ({
-              // Map PII intervals to the actual time when the audio was captured (not when processed)
-              startTime: chunkStartTime + (interval[0] * 1000),
-              endTime: chunkStartTime + (interval[1] * 1000),
+              // Map PII intervals to estimated capture time
+              startTime: estimatedCaptureTime + (interval[0] * 1000),
+              endTime: estimatedCaptureTime + (interval[1] * 1000),
               confidence: interval.confidence || 1.0,
               words: result.metadata.detected_words || [],
               transcript: result.metadata.transcript || ""
             }));
             
-            console.log(`[AUDIO-SERVER] 🕐 PII timing: chunk captured ${chunkStartTime} to ${chunkStartTime + TIMING_CONFIG.AUDIO_CHUNK_DURATION}, events: ${piiEvents.map(e => `${e.startTime}-${e.endTime}`).join(', ')}`);
+            console.log(`[AUDIO-SERVER] 🕐 TIMING DEBUG:`);
+            console.log(`[AUDIO-SERVER] Processing complete: ${processingCompleteTime}`);
+            console.log(`[AUDIO-SERVER] Estimated capture start: ${estimatedCaptureTime}`);
+            console.log(`[AUDIO-SERVER] PII events: ${piiEvents.map(e => `${e.startTime}-${e.endTime}`).join(', ')}`);
+            console.log(`[AUDIO-SERVER] PII words: ${piiEvents.map(e => e.words?.join(' ')).join(', ')}`);
             
             // Store PII events
             if (!piiEventsBuffer.has(roomId)) {
               piiEventsBuffer.set(roomId, []);
             }
             piiEventsBuffer.get(roomId).push(...piiEvents);
-            
-            console.log(`[AUDIO-SERVER] 📝 Stored ${piiEvents.length} PII events: ${piiEvents.map(e => e.words?.join(' ')).join(', ')}`);
           }
           
           // TRIGGER VIDEO PROCESSING IMMEDIATELY (T+3s+100ms)
@@ -443,8 +447,13 @@ io.on('connection', socket => {
           }, TIMING_CONFIG.PROCESSING_BUFFER);
           
           // Send processed audio to viewers
-          const chunkStartTime = Date.now() - TIMING_CONFIG.AUDIO_CHUNK_DURATION;
-          const deliveryDelay = calculateDeliveryDelay(chunkStartTime);
+          // SYNC FIX: Both audio and video should use the same timing reference
+          // Audio chunk represents the MOST RECENT 3 seconds of captured audio
+          // For sync purposes, use the END of the audio chunk (most recent timestamp)
+          const audioChunkEndTime = Date.now() - (TIMING_CONFIG.AUDIO_CHUNK_DURATION / 2); // Middle of the chunk for better sync
+          const deliveryDelay = calculateDeliveryDelay(audioChunkEndTime);
+          
+          console.log(`[AUDIO-SERVER] 🕐 Audio sync timing: chunk end ${audioChunkEndTime}, delivery delay ${deliveryDelay}ms`);
           
           setTimeout(() => {
             const room = rooms.get(roomId);
@@ -941,7 +950,7 @@ function checkPIIEventsForTimestamp(roomId, videoTimestamp) {
   const piiEvents = piiEventsBuffer.get(roomId) || [];
   
   // Add timing tolerance to account for processing delays and frame timing variations
-  const TIMING_TOLERANCE = 500; // 500ms tolerance
+  const TIMING_TOLERANCE = 1500; // 1.5s tolerance (increased to handle timing variations)
   
   const matchFound = piiEvents.some(event => {
     // Check if video frame timestamp falls within PII event time range (with tolerance)
@@ -964,7 +973,7 @@ function checkPIIEventsForTimestamp(roomId, videoTimestamp) {
 
 function getPIIReasonForTimestamp(roomId, videoTimestamp) {
   const piiEvents = piiEventsBuffer.get(roomId) || [];
-  const TIMING_TOLERANCE = 500; // Same tolerance as checkPIIEventsForTimestamp
+  const TIMING_TOLERANCE = 1500; // Same tolerance as checkPIIEventsForTimestamp
   
   const matchingEvent = piiEvents.find(event => 
     (videoTimestamp >= (event.startTime - TIMING_TOLERANCE)) && 
