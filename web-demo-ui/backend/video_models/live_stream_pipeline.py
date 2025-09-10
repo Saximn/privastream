@@ -384,9 +384,9 @@ class UnifiedVideoAnalyzer:
                 if "plate" in models and "rectangles" in models["plate"]:
                     blur_regions["rectangles"].extend(models["plate"]["rectangles"])
                 
-                # PII polygons
-                if "pii" in models and "polygons" in models["pii"]:
-                    blur_regions["polygons"].extend(models["pii"]["polygons"])
+                # PII rectangles
+                if "pii" in models and "rectangles" in models["pii"]:
+                    blur_regions["rectangles"].extend(models["pii"]["rectangles"])
                 
                 # Decrease remaining frames
                 self.detection_cache[cached_frame_id] = (results, remaining_frames - 1)

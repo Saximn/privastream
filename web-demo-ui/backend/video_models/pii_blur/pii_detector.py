@@ -290,32 +290,32 @@ class PIIDetector:
         
         print("[PIIDetector] Initialized")
     
-    def poly_from_box_norm(self, box: Tuple[Tuple[float, float], Tuple[float, float]], 
-                          W: int, H: int) -> np.ndarray:
-        """Convert normalized box to polygon coordinates."""
+    def rect_from_box_norm(self, box: Tuple[Tuple[float, float], Tuple[float, float]], 
+                          W: int, H: int) -> List[int]:
+        """Convert normalized box to rectangle coordinates [x1, y1, x2, y2]."""
         (x0, y0), (x1, y1) = box
         x0, x1 = int(x0 * W), int(x1 * W)
         y0, y1 = int(y0 * H), int(y1 * H)
-        return np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.int32)
+        return [x0, y0, x1, y1]
     
-    def collect_pii_polys(self, frame_bgr: np.ndarray, blur_all: bool = False) -> List[np.ndarray]:
+    def collect_pii_rectangles(self, frame_bgr: np.ndarray, blur_all: bool = False) -> List[List[int]]:
         """
-        Collect PII polygons from a frame.
+        Collect PII rectangles from a frame.
         
         Args:
             frame_bgr: Input frame
             blur_all: If True, blur all detected text regardless of PII classification
             
         Returns:
-            List of polygons to blur
+            List of rectangles to blur [x1, y1, x2, y2]
         """
         H, W = frame_bgr.shape[:2]
         data = self.ocr.infer(frame_bgr)
         pages = data.get("pages", [])
-        polys = []
+        rectangles = []
         
         if not pages:
-            return polys
+            return rectangles
             
         for blk in pages[0].get("blocks", []):
             for line in blk.get("lines", []):
@@ -327,20 +327,22 @@ class PIIDetector:
                     if not geom:
                         continue
                         
-                    poly = self.poly_from_box_norm(geom, W, H)
+                    rect = self.rect_from_box_norm(geom, W, H)
                     
-                    if cv2.contourArea(poly) < self.min_area:
+                    # Calculate area from rectangle
+                    area = (rect[2] - rect[0]) * (rect[3] - rect[1])
+                    if area < self.min_area:
                         continue
                         
                     if blur_all or self.decider.decide(text, conf, self.conf_thresh):
-                        polys.append(poly)
+                        rectangles.append(rect)
         
-        return polys
+        return rectangles
     
     def process_frame(self, frame: np.ndarray, frame_id: int, 
-                     blur_all: bool = False) -> Tuple[int, List[np.ndarray]]:
+                     blur_all: bool = False) -> Tuple[int, List[List[int]]]:
         """
-        Process a single frame and return polygons to be blurred.
+        Process a single frame and return rectangles to be blurred.
         
         Args:
             frame: Input frame (BGR format)
@@ -348,18 +350,32 @@ class PIIDetector:
             blur_all: If True, blur all detected text
             
         Returns:
-            Tuple of (frame_id, list of polygons as numpy arrays)
+            Tuple of (frame_id, list of rectangles as [x1, y1, x2, y2])
         """
-        # Collect PII polygons
-        polys = self.collect_pii_polys(frame, blur_all=blur_all)
+        # Collect PII rectangles
+        rectangles = self.collect_pii_rectangles(frame, blur_all=blur_all)
+        
+        # Convert rectangles to polygons for stabilization (keeping existing stabilizer)
+        polys = []
+        for rect in rectangles:
+            x1, y1, x2, y2 = rect
+            poly = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.int32)
+            polys.append(poly)
         
         # Apply temporal stabilization
         tracks = self.stabilizer.update(polys)
         
-        # Return only active polygons
-        active_polys = [poly for poly, is_active in tracks if is_active]
+        # Convert active polygons back to rectangles
+        active_rectangles = []
+        for poly, is_active in tracks:
+            if is_active:
+                # Convert polygon back to rectangle
+                xs, ys = poly[:, 0], poly[:, 1]
+                x1, y1 = int(xs.min()), int(ys.min())
+                x2, y2 = int(xs.max()), int(ys.max())
+                active_rectangles.append([x1, y1, x2, y2])
         
-        return frame_id, active_polys
+        return frame_id, active_rectangles
     
     def get_model_info(self) -> Dict[str, Any]:
         """Get information about the current model configuration."""

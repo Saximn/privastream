@@ -225,20 +225,20 @@ class UnifiedBoundingBoxTester:
         if 'pii' in self.models:
             try:
                 start_time = time.time()
-                pii_frame_id, pii_polygons = self.models['pii'].process_frame(frame, frame_id)
+                pii_frame_id, pii_rectangles = self.models['pii'].process_frame(frame, frame_id)
                 process_time = time.time() - start_time
                 
                 results['models']['pii'] = {
                     'frame_id': pii_frame_id,
-                    'polygons': pii_polygons,
-                    'count': len(pii_polygons),
-                    'type': 'polygons'
+                    'rectangles': pii_rectangles,
+                    'count': len(pii_rectangles),
+                    'type': 'rectangles'
                 }
                 results['timing']['pii'] = process_time
                 
                 # Update stats
                 self.stats['pii']['frames'] += 1
-                self.stats['pii']['detections'] += len(pii_polygons)
+                self.stats['pii']['detections'] += len(pii_rectangles)
                 self.stats['pii']['total_time'] += process_time
                 
             except Exception as e:
@@ -293,9 +293,9 @@ class UnifiedBoundingBoxTester:
         
         # Draw PII polygons (green)
         pii_data = results.get('models', {}).get('pii', {})
-        if 'polygons' in pii_data:
-            for i, poly in enumerate(pii_data['polygons']):
-                self.draw_polygon(vis_frame, poly, self.colors['pii'], 
+        if 'rectangles' in pii_data:
+            for i, rect in enumerate(pii_data['rectangles']):
+                self.draw_rectangle(vis_frame, rect, self.colors['pii'], 
                                 f"PII_{i+1}", thickness=2)
         
         # Draw plate rectangles (blue) with confidence

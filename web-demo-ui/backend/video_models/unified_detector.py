@@ -136,13 +136,13 @@ class UnifiedBlurDetector:
         # Process with PII detector
         if "pii" in self.models:
             try:
-                pii_frame_id, pii_polygons = self.models["pii"].process_frame(frame, frame_id)
+                pii_frame_id, pii_rectangles = self.models["pii"].process_frame(frame, frame_id)
                 results["models"]["pii"] = {
                     "frame_id": pii_frame_id,
-                    "polygons": pii_polygons,
-                    "count": len(pii_polygons)
+                    "rectangles": pii_rectangles,
+                    "count": len(pii_rectangles)
                 }
-                print(f"[UnifiedTester] PII detections: {len(pii_polygons)}")  # Debug print
+                print(f"[UnifiedTester] PII detections: {len(pii_rectangles)}")  # Debug print
 
             except Exception as e:
                 print(f"[UnifiedDetector][ERROR] PII detection failed: {e}")
@@ -181,6 +181,11 @@ class UnifiedBlurDetector:
         if "rectangles" in face_data:
             rectangles.extend(face_data["rectangles"])
         
+        # PII rectangles
+        pii_data = results.get("models", {}).get("pii", {})
+        if "rectangles" in pii_data:
+            rectangles.extend(pii_data["rectangles"])
+        
         # Plate rectangles
         plate_data = results.get("models", {}).get("plate", {})
         if "rectangles" in plate_data:
@@ -191,19 +196,24 @@ class UnifiedBlurDetector:
     def get_all_polygons(self, results: Dict[str, Any]) -> List[np.ndarray]:
         """
         Extract all polygons from detection results.
+        Note: PII detector now returns rectangles, not polygons.
         
         Args:
             results: Results from process_frame
             
         Returns:
-            Combined list of all polygons
+            Combined list of all polygons (empty list since PII now uses rectangles)
         """
         polygons = []
         
-        # PII polygons
-        pii_data = results.get("models", {}).get("pii", {})
-        if "polygons" in pii_data:
-            polygons.extend(pii_data["polygons"])
+        # PII now returns rectangles, not polygons
+        # If polygons are needed, convert rectangles to polygons:
+        # pii_data = results.get("models", {}).get("pii", {})
+        # if "rectangles" in pii_data:
+        #     for rect in pii_data["rectangles"]:
+        #         x1, y1, x2, y2 = rect
+        #         poly = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.int32)
+        #         polygons.append(poly)
         
         return polygons
     
@@ -331,13 +341,13 @@ def demo_unified_detector():
                     cv2.rectangle(vis_frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
                     cv2.putText(vis_frame, "FACE", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
             
-            # Draw PII polygons (green)
+            # Draw PII rectangles (green)
             pii_data = results.get("models", {}).get("pii", {})
-            if "polygons" in pii_data:
-                for poly in pii_data["polygons"]:
-                    cv2.polylines(vis_frame, [poly], True, (0, 255, 0), 2)
-                    if len(poly) > 0:
-                        cv2.putText(vis_frame, "PII", tuple(poly[0]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            if "rectangles" in pii_data:
+                for rect in pii_data["rectangles"]:
+                    x1, y1, x2, y2 = rect
+                    cv2.rectangle(vis_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv2.putText(vis_frame, "PII", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
             
             # Draw plate rectangles (blue)
             plate_data = results.get("models", {}).get("plate", {})
@@ -368,7 +378,7 @@ def demo_unified_detector():
                 with open(filename, 'w') as f:
                     f.write(f"Frame {frame_id} Detection Results:\n")
                     f.write(f"Face rectangles: {face_data.get('rectangles', [])}\n")
-                    f.write(f"PII polygons: {len(pii_data.get('polygons', []))} polygons\n")
+                    f.write(f"PII rectangles: {pii_data.get('rectangles', [])}\n")
                     f.write(f"Plate rectangles: {plate_data.get('rectangles', [])}\n")
                 print(f"Saved results to {filename}")
             
