@@ -804,6 +804,8 @@ def cleanup_room(room_id: str):
 @app.route('/detect-faces-mouths', methods=['POST'])
 def detect_faces_and_mouths():
     """Fast face + mouth landmark detection AND PII/plate detection for immediate caching"""
+    processing_started = False
+    
     try:
         data = request.get_json()
         if not data or 'frame' not in data:
@@ -813,71 +815,120 @@ def detect_faces_and_mouths():
         frame_id = data.get('frame_id', 0)
         room_id = data.get('room_id', None)
         
-        # Decode frame
-        if frame_data.startswith('data:image'):
-            frame_data = frame_data.split(',')[1]
-        img_bytes = base64.b64decode(frame_data)
-        img_array = np.frombuffer(img_bytes, dtype=np.uint8)
-        frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+        # Get request timestamp (from client or use current time)
+        request_timestamp = data.get('timestamp', int(time.time() * 1000))
         
-        if frame is None:
-            return jsonify({"error": "Invalid image data"}), 400
+        if room_id:
+            print(f"[API] Processing frame {frame_id} for room {room_id}")
         
-        # Initialize detector if needed
-        if detector is None:
-            init_detector()
-        if detector == "failed":
-            return jsonify({"error": "Detector not available"}), 500
+        # 1. Check if request is too old
+        if is_request_stale(request_timestamp):
+            print(f"[QUEUE] 🗑️ DROPPING STALE REQUEST - Frame {frame_id} is too old to process")
+            return jsonify({
+                "success": False,
+                "error": "Request too old",
+                "frame_id": frame_id,
+                "dropped": True,
+                "reason": "stale_request"
+            }), 429  # Too Many Requests
         
-        # Update face detector embedding if room has enrolled face
-        print(f"[API] DEBUG: Checking room_id='{room_id}', available rooms: {list(room_embeddings.keys())}")
-        if room_id and room_id in room_embeddings:
-            print(f"[API] ✅ Updating face embedding for room {room_id}")
-            embedding = room_embeddings[room_id]['embedding']  # Extract just the numpy array
-            detector.update_face_embedding(embedding)
-        else:
-            print(f"[API] ⚠️ No embedding found for room {room_id} (available: {list(room_embeddings.keys())})")
+        # 2. Check concurrent request limit
+        if not can_process_request():
+            print(f"[QUEUE] 🚫 DROPPING REQUEST - Too many concurrent requests, Frame {frame_id}")
+            return jsonify({
+                "success": False,
+                "error": "Server overloaded",
+                "frame_id": frame_id,
+                "dropped": True,
+                "reason": "overloaded"
+            }), 503  # Service Unavailable
+        
+        # 3. Mark request as started
+        start_request_processing()
+        processing_started = True
+        
+        try:
+            # Decode frame
+            if frame_data.startswith('data:image'):
+                frame_data = frame_data.split(',')[1]
+            img_bytes = base64.b64decode(frame_data)
+            img_array = np.frombuffer(img_bytes, dtype=np.uint8)
+            frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
             
-        # STAGE 1: Get face blur regions and mouth landmarks
-        start_time = time.time()
-        frame_id_result, face_blur_regions, mouth_regions = detector.process_frame_with_mouth_landmarks(
-            frame, frame_id, stride=1
-        )
-        
-        # STAGE 2: Get PII and plate detections (run full unified detection)
-        full_results = detector.process_frame(frame, frame_id, stride=1)
-        
-        # Extract PII and plate rectangles from full results
-        pii_regions = []
-        plate_regions = []
-        
-        pii_data = full_results.get("models", {}).get("pii", {})
-        if "rectangles" in pii_data:
-            pii_regions = pii_data["rectangles"]
-            print(f"[API] 🔍 PII detection found {len(pii_regions)} regions")
-        
-        plate_data = full_results.get("models", {}).get("plate", {})
-        if "rectangles" in plate_data:
-            plate_regions = plate_data["rectangles"]
-            print(f"[API] 🔍 Plate detection found {len(plate_regions)} regions")
+            if frame is None:
+                return jsonify({"error": "Invalid image data"}), 400
             
-        detection_time = time.time() - start_time
+            # Initialize detector if needed
+            if detector is None:
+                init_detector()
+            if detector == "failed":
+                return jsonify({"error": "Detector not available"}), 500
+            
+            # Update face detector embedding if room has enrolled face
+            print(f"[API] DEBUG: Checking room_id='{room_id}', available rooms: {list(room_embeddings.keys())}")
+            if room_id and room_id in room_embeddings:
+                print(f"[API] ✅ Updating face embedding for room {room_id}")
+                embedding = room_embeddings[room_id]['embedding']  # Extract just the numpy array
+                detector.update_face_embedding(embedding)
+            else:
+                print(f"[API] ⚠️ No embedding found for room {room_id} (available: {list(room_embeddings.keys())})")
+                
+            # Log processing mode
+            print(f"[API] Processing frame {frame_id} in FAST_DETECTION mode (face+mouth+PII+plate)")
+                
+            # STAGE 1: Get face blur regions and mouth landmarks
+            start_time = time.time()
+            frame_id_result, face_blur_regions, mouth_regions = detector.process_frame_with_mouth_landmarks(
+                frame, frame_id, stride=1
+            )
+            
+            # STAGE 2: Get PII and plate detections (run full unified detection)
+            full_results = detector.process_frame(frame, frame_id, stride=1)
+            
+            # Extract PII and plate rectangles from full results
+            pii_regions = []
+            plate_regions = []
+            
+            pii_data = full_results.get("models", {}).get("pii", {})
+            if "rectangles" in pii_data:
+                pii_regions = pii_data["rectangles"]
+                print(f"[API] 🔍 PII detection found {len(pii_regions)} regions")
+            
+            plate_data = full_results.get("models", {}).get("plate", {})
+            if "rectangles" in plate_data:
+                plate_regions = plate_data["rectangles"]
+                print(f"[API] 🔍 Plate detection found {len(plate_regions)} regions")
+                
+            detection_time = time.time() - start_time
+            
+            return jsonify({
+                "success": True,
+                "frame_id": frame_id,
+                "face_blur_regions": face_blur_regions,
+                "mouth_regions": mouth_regions,
+                "pii_regions": pii_regions,
+                "plate_regions": plate_regions,
+                "detection_time": detection_time,
+                "total_faces": len(mouth_regions),
+                "faces_to_blur": len(face_blur_regions),
+                "pii_count": len(pii_regions),
+                "plate_count": len(plate_regions),
+                "processing_mode": "fast_detection"
+            })
         
-        return jsonify({
-            "success": True,
-            "frame_id": frame_id,
-            "face_blur_regions": face_blur_regions,
-            "mouth_regions": mouth_regions,
-            "pii_regions": pii_regions,
-            "plate_regions": plate_regions,
-            "detection_time": detection_time,
-            "total_faces": len(mouth_regions),
-            "faces_to_blur": len(face_blur_regions),
-            "pii_count": len(pii_regions),
-            "plate_count": len(plate_regions)
-        })
-        
+        finally:
+            # Always mark request as finished if we started processing
+            if processing_started:
+                finish_request_processing()
+
     except Exception as e:
+        # Make sure to finish request processing if we started it
+        if processing_started:
+            try:
+                finish_request_processing()
+            except:
+                pass  # Ignore errors in cleanup
+        
         print(f"[API] Fast detection error: {e}")
         return jsonify({"error": str(e)}), 500
 
