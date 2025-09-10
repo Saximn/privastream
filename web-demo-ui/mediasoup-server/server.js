@@ -640,6 +640,8 @@ io.on('connection', socket => {
                 detectionCache.set(frameId, {
                   face_blur_regions: result.face_blur_regions || [],
                   mouth_regions: result.mouth_regions || [],
+                  pii_regions: result.pii_regions || [],
+                  plate_regions: result.plate_regions || [],
                   originalFrame: frame,
                   captureTimestamp: timestamp || Date.now(),  // Use current time as fallback if timestamp is undefined
                   roomId: roomId,
@@ -655,7 +657,7 @@ io.on('connection', socket => {
                 }
                 frameAudioMapping.get(roomId).pendingFrames.push(frameId);
                 
-                console.log(`[VIDEO-SERVER] 📦 Cached frame ${frameId}: ${result.total_faces} faces, ${result.mouth_regions?.length || 0} mouths. Pending: ${frameAudioMapping.get(roomId).pendingFrames.length}`);
+                console.log(`[VIDEO-SERVER] 📦 Cached frame ${frameId}: ${result.total_faces} faces, ${result.mouth_regions?.length || 0} mouths, ${result.pii_count || 0} PII, ${result.plate_count || 0} plates. Pending: ${frameAudioMapping.get(roomId).pendingFrames.length}`);
                 
               } else {
                 console.warn('[VIDEO-SERVER] ⚠️ Detection failed for frame', frameId, '- Status:', detectionResult.status);
@@ -890,7 +892,7 @@ async function processVideoFrameWithPII(frameId) {
     return;
   }
   
-  const { face_blur_regions, mouth_regions, originalFrame, captureTimestamp, roomId } = cached;
+  const { face_blur_regions, mouth_regions, pii_regions, plate_regions, originalFrame, captureTimestamp, roomId } = cached;
   
   // Check PII events for this frame's timestamp
   const shouldBlurMouths = checkPIIEventsForTimestamp(roomId, captureTimestamp);
@@ -908,6 +910,8 @@ async function processVideoFrameWithPII(frameId) {
         frame: originalFrame,
         face_blur_regions: face_blur_regions,
         mouth_regions: mouth_regions,
+        pii_regions: pii_regions,
+        plate_regions: plate_regions,
         blur_mouths: shouldBlurMouths,
         blur_mode: shouldBlurMouths ? 'faces_and_mouths' : 'faces_only',
         pii_reason: piiReason
@@ -940,7 +944,7 @@ async function processVideoFrameWithPII(frameId) {
             });
           });
           
-          console.log(`[VIDEO-SERVER] 📤 Delivered frame ${frameId} to ${room.viewers.size} viewers (faces: ${result.faces_blurred}, mouths: ${result.mouths_blurred})`);
+          console.log(`[VIDEO-SERVER] 📤 Delivered frame ${frameId} to ${room.viewers.size} viewers (faces: ${result.faces_blurred}, mouths: ${result.mouths_blurred}, PII: ${result.pii_blurred || 0}, plates: ${result.plates_blurred || 0})`);
         }
       }, deliveryDelay);
       

@@ -43,7 +43,7 @@ print(f"[CONFIG] Expected detection delay: {EXPECTED_DELAY_SEC:.2f} seconds")
 # Detector configuration
 DETECTOR_CONFIG = {
     "enable_face": True,
-    "enable_pii": False,
+    "enable_pii": True,
     "enable_plate": True,
     "pii": {
         "classifier_path": "video_models/pii_blur/pii_clf.joblib",
@@ -803,7 +803,7 @@ def cleanup_room(room_id: str):
 
 @app.route('/detect-faces-mouths', methods=['POST'])
 def detect_faces_and_mouths():
-    """Fast face + mouth landmark detection for immediate caching"""
+    """Fast face + mouth landmark detection AND PII/plate detection for immediate caching"""
     try:
         data = request.get_json()
         if not data or 'frame' not in data:
@@ -838,11 +838,29 @@ def detect_faces_and_mouths():
         else:
             print(f"[API] ⚠️ No embedding found for room {room_id} (available: {list(room_embeddings.keys())})")
             
-        # Get face blur regions and mouth landmarks
+        # STAGE 1: Get face blur regions and mouth landmarks
         start_time = time.time()
         frame_id_result, face_blur_regions, mouth_regions = detector.process_frame_with_mouth_landmarks(
             frame, frame_id, stride=1
         )
+        
+        # STAGE 2: Get PII and plate detections (run full unified detection)
+        full_results = detector.process_frame(frame, frame_id, stride=1)
+        
+        # Extract PII and plate rectangles from full results
+        pii_regions = []
+        plate_regions = []
+        
+        pii_data = full_results.get("models", {}).get("pii", {})
+        if "rectangles" in pii_data:
+            pii_regions = pii_data["rectangles"]
+            print(f"[API] 🔍 PII detection found {len(pii_regions)} regions")
+        
+        plate_data = full_results.get("models", {}).get("plate", {})
+        if "rectangles" in plate_data:
+            plate_regions = plate_data["rectangles"]
+            print(f"[API] 🔍 Plate detection found {len(plate_regions)} regions")
+            
         detection_time = time.time() - start_time
         
         return jsonify({
@@ -850,9 +868,13 @@ def detect_faces_and_mouths():
             "frame_id": frame_id,
             "face_blur_regions": face_blur_regions,
             "mouth_regions": mouth_regions,
+            "pii_regions": pii_regions,
+            "plate_regions": plate_regions,
             "detection_time": detection_time,
             "total_faces": len(mouth_regions),
-            "faces_to_blur": len(face_blur_regions)
+            "faces_to_blur": len(face_blur_regions),
+            "pii_count": len(pii_regions),
+            "plate_count": len(plate_regions)
         })
         
     except Exception as e:
@@ -861,7 +883,7 @@ def detect_faces_and_mouths():
 
 @app.route('/apply-conditional-blur', methods=['POST'])  
 def apply_conditional_blur():
-    """Apply face blur + conditional mouth blur based on PII events"""
+    """Apply face blur + conditional mouth blur + PII blur + plate blur"""
     try:
         data = request.get_json()
         if not data or 'frame' not in data:
@@ -870,6 +892,8 @@ def apply_conditional_blur():
         frame_data = data['frame']
         face_blur_regions = data.get('face_blur_regions', [])
         mouth_regions = data.get('mouth_regions', [])
+        pii_regions = data.get('pii_regions', [])
+        plate_regions = data.get('plate_regions', [])
         blur_mouths = data.get('blur_mouths', False)
         blur_mode = data.get('blur_mode', 'faces_only')
         pii_reason = data.get('pii_reason', None)
@@ -889,6 +913,20 @@ def apply_conditional_blur():
         for region in face_blur_regions:
             apply_gaussian_blur_region(frame, region)
             faces_blurred += 1
+        
+        # Apply PII blurring (always - privacy protection)
+        pii_blurred = 0
+        for region in pii_regions:
+            apply_gaussian_blur_region(frame, region)
+            pii_blurred += 1
+        print(f"[API] 🔒 Applied PII blur to {pii_blurred} regions")
+        
+        # Apply plate blurring (always - privacy protection)
+        plates_blurred = 0
+        for region in plate_regions:
+            apply_gaussian_blur_region(frame, region)
+            plates_blurred += 1
+        print(f"[API] 🚗 Applied plate blur to {plates_blurred} regions")
         
         # Apply mouth blurring (conditional - PII protection)
         mouths_blurred = 0
@@ -930,6 +968,8 @@ def apply_conditional_blur():
             "processed_frame": frame_b64,
             "faces_blurred": faces_blurred,
             "mouths_blurred": mouths_blurred,
+            "pii_blurred": pii_blurred,
+            "plates_blurred": plates_blurred,
             "blur_mode": blur_mode,
             "pii_triggered": blur_mouths
         })
