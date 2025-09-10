@@ -31,9 +31,23 @@ const TIMING_CONFIG = {
 
 // Calculate when to deliver based on original capture time
 function calculateDeliveryDelay(originalTimestamp) {
+  // Handle invalid timestamps
+  if (!originalTimestamp || isNaN(originalTimestamp)) {
+    console.warn('[TIMING] Invalid timestamp provided, using current time as fallback');
+    originalTimestamp = Date.now();
+  }
+  
   const targetDeliveryTime = originalTimestamp + TIMING_CONFIG.TOTAL_VIEWER_DELAY;
   const currentTime = Date.now();
-  return Math.max(0, targetDeliveryTime - currentTime);
+  const delay = Math.max(0, targetDeliveryTime - currentTime);
+  
+  // Additional safety check for NaN results
+  if (isNaN(delay)) {
+    console.warn('[TIMING] Calculated delay is NaN, using minimum delay of 100ms');
+    return 100;
+  }
+  
+  return delay;
 }
 
 console.log(`[CONFIG] Audio processing: ${TIMING_CONFIG.AUDIO_CHUNK_DURATION}ms`);
@@ -561,7 +575,7 @@ io.on('connection', socket => {
           socket.on('video-frame', async (data) => {
             try {
               const { roomId, frame, frameId, timestamp } = data;
-              console.log('[VIDEO-SERVER] 🎯 Fast detection for frame', frameId, 'room:', roomId);
+              console.log('[VIDEO-SERVER] 🎯 Fast detection for frame', frameId, 'room:', roomId, 'timestamp:', timestamp);
               
               // Notify viewers on first frame that host is streaming
               if (!hasNotifiedViewers) {
@@ -603,7 +617,7 @@ io.on('connection', socket => {
                   face_blur_regions: result.face_blur_regions || [],
                   mouth_regions: result.mouth_regions || [],
                   originalFrame: frame,
-                  captureTimestamp: timestamp,  // Original capture time
+                  captureTimestamp: timestamp || Date.now(),  // Use current time as fallback if timestamp is undefined
                   roomId: roomId,
                   cacheTime: Date.now()
                 });

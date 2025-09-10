@@ -332,12 +332,14 @@ export default function Host() {
           // Convert to base64
           const frameData = canvas.toDataURL("image/jpeg", 0.7);
           const frameId = Date.now();
+          const timestamp = Date.now(); // Capture timestamp for processing timing
 
           // Send frame to MediaSoup server for processing
           if (sfuSocketRef.current) {
             sfuSocketRef.current.emit("video-frame", {
               frame: frameData,
               frameId: frameId,
+              timestamp: timestamp, // Add timestamp for delay calculations
               roomId: roomId,
             });
 
