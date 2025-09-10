@@ -242,6 +242,32 @@ class UnifiedBlurDetector:
             print("[UnifiedDetector][WARN] Face detector not available for embedding update")
             return False
 
+    def process_frame_with_mouth_landmarks(self, frame: np.ndarray, frame_id: int, 
+                                         stride: int = 1) -> Tuple[int, List[List[int]], List[Dict]]:
+        """
+        Enhanced frame processing that returns both face blur regions and mouth landmarks.
+        Routes to the face detector's mouth landmark extraction method.
+        
+        Args:
+            frame: Input frame (BGR format)
+            frame_id: Frame identifier
+            stride: Process every N frames for detection
+            
+        Returns:
+            Tuple of (frame_id, face_blur_regions, mouth_regions)
+        """
+        if "face" in self.models:
+            try:
+                return self.models["face"].process_frame_with_mouth_landmarks(frame, frame_id, stride)
+            except Exception as e:
+                print(f"[UnifiedDetector][ERROR] Mouth landmark processing failed: {e}")
+                # Fallback: return regular face processing with empty mouths
+                regular_result = self.models["face"].process_frame(frame, frame_id, stride)
+                return regular_result[0], regular_result[1], []  # frame_id, rectangles, empty mouths
+        else:
+            print("[UnifiedDetector][WARN] Face detector not available for mouth landmarks")
+            return frame_id, [], []
+
 
 def demo_unified_detector():
     """Demonstration of the unified detector."""
