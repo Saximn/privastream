@@ -828,6 +828,15 @@ def detect_faces_and_mouths():
             init_detector()
         if detector == "failed":
             return jsonify({"error": "Detector not available"}), 500
+        
+        # Update face detector embedding if room has enrolled face
+        print(f"[API] DEBUG: Checking room_id='{room_id}', available rooms: {list(room_embeddings.keys())}")
+        if room_id and room_id in room_embeddings:
+            print(f"[API] ✅ Updating face embedding for room {room_id}")
+            embedding = room_embeddings[room_id]['embedding']  # Extract just the numpy array
+            detector.update_face_embedding(embedding)
+        else:
+            print(f"[API] ⚠️ No embedding found for room {room_id} (available: {list(room_embeddings.keys())})")
             
         # Get face blur regions and mouth landmarks
         start_time = time.time()
