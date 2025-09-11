@@ -172,7 +172,7 @@ class UnifiedBlurDetector:
             tasks.append(self._process_face_model_async("face", frame, frame_id, stride, tta_every, room_id=room_id))
 
         if "pii" in self.models:
-            tasks.append(self._process_pii_model_async("pii", frame, frame_id, stride, tta_every))
+            tasks.append(self._process_pii_model_async("pii", frame, frame_id, stride, tta_every, room_id=room_id))
 
         if "plate" in self.models:
             tasks.append(self._process_plate_model_async("plate", frame, frame_id, stride, tta_every))
@@ -207,13 +207,13 @@ class UnifiedBlurDetector:
             
         return await loop.run_in_executor(self.executor, face_task)
     
-    async def _process_pii_model_async(self, model_name: str, frame: np.ndarray, frame_id: int, stride: int, tta_every: int) -> Optional[Dict[str, Any]]:
+    async def _process_pii_model_async(self, model_name: str, frame: np.ndarray, frame_id: int, stride: int, tta_every: int, room_id: str = None) -> Optional[Dict[str, Any]]:
         loop = asyncio.get_event_loop()
 
         def pii_task():
             with self.model_locks["pii"]:
                 start_time = time.time()
-                pii_frame_id, pii_rectangles = self.models["pii"].process_frame(frame, frame_id)
+                pii_frame_id, pii_rectangles = self.models["pii"].process_frame(frame, frame_id, room_id=room_id)
                 end_time = time.time()
                 print(f"[UnifiedDetector] PII detection time: {end_time - start_time:.5f}s for frame {frame_id}")
                 return "pii", {
@@ -356,6 +356,9 @@ class UnifiedBlurDetector:
         try:
             if "face" in self.models:
                 self.models["face"].cleanup_room(room_id)
+            
+            if "pii" in self.models:
+                self.models["pii"].cleanup_room(room_id)
             
             print(f"[UnifiedDetector] Cleaned up data for room: {room_id}")
             return True
