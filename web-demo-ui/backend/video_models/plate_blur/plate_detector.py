@@ -23,9 +23,9 @@ class PlateDetector:
     """
     
     def __init__(self,
-                 weights_path: str = "best.pt",
-                 imgsz: int = 960,
-                 conf_thresh: float = 0.25,
+                 weights_path: str = "best.engine",
+                 imgsz: int = 640,
+                 conf_thresh: float = 0.35,
                  iou_thresh: float = 0.5,
                  pad: int = 4):
         """
@@ -51,6 +51,7 @@ class PlateDetector:
         self.model = YOLO(weights_path)
         
         print(f"[PlateDetector] Initialized with device={self.device}")
+        
     
     def clamp(self, v: float, lo: int, hi: int) -> int:
         """Clamp value between bounds."""
@@ -125,6 +126,7 @@ class PlateDetector:
         # Run YOLO detection
         detections = self.yolo_predict(frame)
         
+        print(detections)
         # Convert to padded rectangles
         rectangles = []
         for x1, y1, x2, y2, conf, cls in detections:

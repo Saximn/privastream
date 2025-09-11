@@ -93,7 +93,7 @@ class UnifiedBlurDetector:
                 self.models["plate"] = PlateDetector(
                     weights_path=plate_config.get("weights_path", os.path.join(os.path.dirname(__file__), "plate_blur/best.pt")),
                     imgsz=plate_config.get("imgsz", 960),
-                    conf_thresh=plate_config.get("conf_thresh", 0.25),
+                    conf_thresh=plate_config.get("conf_thresh", 0.35),
                     iou_thresh=plate_config.get("iou_thresh", 0.5),
                     pad=plate_config.get("pad", 4)
                 )
@@ -102,6 +102,10 @@ class UnifiedBlurDetector:
                 print(f"[UnifiedDetector][WARN] Plate detector initialization failed: {e}")
         
         print(f"[UnifiedDetector] Initialized with {len(self.models)} models: {list(self.models.keys())}")
+        dummy_frame = np.zeros((640, 640, 3), dtype=np.uint8)
+        for _ in range(10):
+            self.process_frame(dummy_frame, frame_id=-1)
+        print("[UnifiedDetector] Engine warmed up with dummy frame")
     
     def process_frame(self, frame: np.ndarray, frame_id: int, stride: int = 1, tta_every: int = 0) -> Dict[str, Any]:
         """
@@ -123,7 +127,10 @@ class UnifiedBlurDetector:
         # Process with face detector
         if "face" in self.models:
             try:
+                start_time = time.time()
                 face_frame_id, face_rectangles = self.models["face"].process_frame(frame, frame_id, stride, tta_every)
+                end_time = time.time()
+                print(f"[UnifiedDetector] Face detection time: {end_time - start_time:.5f}s")
                 results["models"]["face"] = {
                     "frame_id": face_frame_id,
                     "rectangles": face_rectangles,
@@ -136,7 +143,10 @@ class UnifiedBlurDetector:
         # Process with PII detector
         if "pii" in self.models:
             try:
+                start_time = time.time()
                 pii_frame_id, pii_rectangles = self.models["pii"].process_frame(frame, frame_id)
+                end_time = time.time()
+                print(f"[UnifiedDetector] PII detection time: {end_time - start_time:.5f}s")
                 results["models"]["pii"] = {
                     "frame_id": pii_frame_id,
                     "rectangles": pii_rectangles,
@@ -152,7 +162,10 @@ class UnifiedBlurDetector:
         # Process with plate detector
         if "plate" in self.models:
             try:
+                start_time = time.time()
                 plate_frame_id, plate_rectangles = self.models["plate"].process_frame(frame, frame_id)
+                end_time = time.time()
+                print(f"[UnifiedDetector] Plate detection time: {end_time - start_time:.5f}s")
                 results["models"]["plate"] = {
                     "frame_id": plate_frame_id,
                     "rectangles": plate_rectangles,

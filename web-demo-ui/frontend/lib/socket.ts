@@ -37,7 +37,7 @@ export class SocketManager {
   constructor(serverUrl?: string) {
     this.serverUrl = serverUrl || API_CONFIG.BACKEND_URL;
 
-    this.socket = io(this.serverUrl, {
+    this.socket = io(serverUrl, {
       transports: ['websocket', 'polling'],
       path: '/backend/socket.io'
     })

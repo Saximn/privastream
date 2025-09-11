@@ -63,7 +63,7 @@ DEBUG_CONFIG = {
 # Request queue protection configuration
 QUEUE_CONFIG = {
     "max_request_age_ms": 1000,  # Drop requests older than 1 second
-    "max_concurrent_requests": 15,  # Limit concurrent processing to prevent GPU overload
+    "max_concurrent_requests": 50,  # Limit concurrent processing to prevent GPU overload
     "enable_request_dropping": True,  # Enable/disable request age checking
     "queue_monitoring": True  # Enable queue monitoring logs
 }
@@ -289,7 +289,7 @@ def filter_frame(frame, frame_id=0, blur_only=False, provided_rectangles=None, r
                 if x >= 0 and y >= 0 and x + w <= frame.shape[1] and y + h <= frame.shape[0] and w > 0 and h > 0:
                     roi = frame[y:y+h, x:x+w]
                     if roi.size > 0:
-                        frame[y:y+h, x:x+w] = cv2.GaussianBlur(roi, (0, 0), sigmaX=75, sigmaY=75)
+                        frame[y:y+h, x:x+w] = cv2.blur(roi, (75, 75))
                         blur_applied += 1
         except Exception as e:
             print(f"[API] Error blurring rectangle {rect}: {e}")
@@ -1041,7 +1041,7 @@ def apply_gaussian_blur_region(frame, region):
     if x2 > x1 and y2 > y1:
         roi = frame[y1:y2, x1:x2]
         if roi.size > 0:
-            frame[y1:y2, x1:x2] = cv2.GaussianBlur(roi, (0, 0), sigmaX=75, sigmaY=75)
+            frame[y1:y2, x1:x2] = cv2.blur(roi, (75, 75))
 
 def apply_landmark_mouth_blur(frame, mouth_landmarks):
     """Apply rectangular blur using mouth landmarks to determine bounds"""
@@ -1093,7 +1093,7 @@ def apply_strong_mouth_blur(frame, mouth_bbox):
         roi = frame[y1:y2, x1:x2]
         if roi.size > 0:
             # Very strong blur for mouth (higher than face blur)
-            blurred = cv2.GaussianBlur(roi, (0, 0), sigmaX=150, sigmaY=150)
+            blurred = cv2.blur(roi, (150, 150))
             frame[y1:y2, x1:x2] = blurred
 
 @app.route('/transfer-embedding', methods=['POST'])

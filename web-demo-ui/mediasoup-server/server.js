@@ -24,7 +24,7 @@ try {
 // TIMING CONFIGURATION - Easy to adjust
 const TIMING_CONFIG = {
   AUDIO_CHUNK_DURATION: 3000,      // Audio processing takes 3s
-  TOTAL_VIEWER_DELAY: 8000,        // Configurable total delay (can change to 5s later)
+  TOTAL_VIEWER_DELAY: 6000,        // Configurable total delay (can change to 5s later)
   PROCESSING_BUFFER: 100,          // Small buffer after audio completes (100ms)
   CACHE_CLEANUP_INTERVAL: 30000    // Cleanup every 30s
 };

@@ -23,7 +23,7 @@ DEVICE = "cuda" if TORCH_OK and torch.cuda.is_available() else "cpu"
 class OCRPipeline:
     """Unified OCR interface supporting docTR and EasyOCR."""
     
-    def __init__(self, det_arch: str = "db_resnet50", reco_arch: str = "parseq"):
+    def __init__(self, det_arch: str = "db_mobilenet_v3_large", reco_arch: str = "crnn_mobilenet_v3_small"):
         """
         Initialize OCR pipeline.
         
