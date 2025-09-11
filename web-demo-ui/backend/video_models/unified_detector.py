@@ -10,6 +10,10 @@ from typing import List, Tuple, Dict, Any, Optional, Union
 import numpy as np
 import cv2
 
+import asyncio
+import concurrent.futures
+from threading import Lock
+
 # Add model directories to path
 sys.path.append(str(Path(__file__).parent / "face_blur"))
 sys.path.append(str(Path(__file__).parent / "pii_blur"))
@@ -49,6 +53,8 @@ class UnifiedBlurDetector:
         """
         self.config = config or {}
         self.models = {}
+        self.model_locks = {}
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
         
         # Initialize enabled models
         self._init_models()
@@ -67,6 +73,7 @@ class UnifiedBlurDetector:
                     dilate_px=face_config.get("dilate_px", 12),
                     smooth_ms=face_config.get("smooth_ms", 300)
                 )
+                self.model_locks["face"] = Lock()
                 print("[UnifiedDetector] Face detector initialized")
             except Exception as e:
                 print(f"[UnifiedDetector][WARN] Face detector initialization failed: {e}")
@@ -82,6 +89,7 @@ class UnifiedBlurDetector:
                     K_confirm=pii_config.get("K_confirm", 2),
                     K_hold=pii_config.get("K_hold", 8)
                 )
+                self.model_locks["pii"] = Lock()
                 print("[UnifiedDetector] PII detector initialized")
             except Exception as e:
                 print(f"[UnifiedDetector][WARN] PII detector initialization failed: {e}")
@@ -97,6 +105,7 @@ class UnifiedBlurDetector:
                     iou_thresh=plate_config.get("iou_thresh", 0.5),
                     pad=plate_config.get("pad", 4)
                 )
+                self.model_locks["plate"] = Lock()
                 print("[UnifiedDetector] Plate detector initialized")
             except Exception as e:
                 print(f"[UnifiedDetector][WARN] Plate detector initialization failed: {e}")
@@ -140,7 +149,7 @@ class UnifiedBlurDetector:
                 print(f"[UnifiedDetector] 🔥 Warmup round {round_num+1}/3, frame {i+1}/4:{warmup_time:.3f}s")
         print("[UnifiedDetector] ✅ Advanced warm-up complete - models should be fully optimized")
     
-    def process_frame(self, frame: np.ndarray, frame_id: int, stride: int = 1, tta_every: int = 0) -> Dict[str, Any]:
+    async def process_frame_async(self, frame: np.ndarray, frame_id: int, stride: int = 1, tta_every: int = 0) -> Dict[str, Any]:
         """
         Process a frame with all enabled models.
         
@@ -157,58 +166,94 @@ class UnifiedBlurDetector:
             "models": {}
         }
         
-        # Process with face detector
+        tasks = []
+
         if "face" in self.models:
-            try:
+            tasks.append(self._process_face_model_async("face", frame, frame_id, stride, tta_every))
+
+        if "pii" in self.models:
+            tasks.append(self._process_pii_model_async("pii", frame, frame_id, stride, tta_every))
+
+        if "plate" in self.models:
+            tasks.append(self._process_plate_model_async("plate", frame, frame_id, stride, tta_every))
+
+        model_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for result in model_results:
+            if isinstance(result, Exception):
+                print(f"[UnifiedDetector][ERROR] Model processing failed: {result}")
+                continue
+            if result:
+                model_type, model_data = result
+                results["models"][model_type] = model_data
+
+        print(f"[UnifiedDetector] Frame {frame_id} processed with results: {results}")
+        return results
+
+    async def _process_face_model_async(self, model_name: str, frame: np.ndarray, frame_id: int, stride: int, tta_every: int) -> Optional[Dict[str, Any]]:
+        loop = asyncio.get_event_loop()
+
+        def face_task():
+            with self.model_locks["face"]:
                 start_time = time.time()
                 face_frame_id, face_rectangles = self.models["face"].process_frame(frame, frame_id, stride, tta_every)
                 end_time = time.time()
                 print(f"[UnifiedDetector] Face detection time: {end_time - start_time:.5f}s for frame {frame_id}")
-                results["models"]["face"] = {
+                return "face", {
                     "frame_id": face_frame_id,
                     "rectangles": face_rectangles,
                     "count": len(face_rectangles)
                 }
-            except Exception as e:
-                print(f"[UnifiedDetector][ERROR] Face detection failed: {e}")
-                results["models"]["face"] = {"error": str(e)}
-        
-        # Process with PII detector
-        if "pii" in self.models:
-            try:
+            
+        return await loop.run_in_executor(self.executor, face_task)
+    
+    async def _process_pii_model_async(self, model_name: str, frame: np.ndarray, frame_id: int, stride: int, tta_every: int) -> Optional[Dict[str, Any]]:
+        loop = asyncio.get_event_loop()
+
+        def pii_task():
+            with self.model_locks["pii"]:
                 start_time = time.time()
                 pii_frame_id, pii_rectangles = self.models["pii"].process_frame(frame, frame_id)
                 end_time = time.time()
-                print(f"[UnifiedDetector] PII detection time: {end_time - start_time:.5f}s")
-                results["models"]["pii"] = {
+                print(f"[UnifiedDetector] PII detection time: {end_time - start_time:.5f}s for frame {frame_id}")
+                return "pii", {
                     "frame_id": pii_frame_id,
                     "rectangles": pii_rectangles,
                     "count": len(pii_rectangles)
                 }
-                print(f"[UnifiedTester] PII detections: {len(pii_rectangles)}")  # Debug print
+            
+        return await loop.run_in_executor(self.executor, pii_task)
+    
+    async def _process_plate_model_async(self, model_name: str, frame: np.ndarray, frame_id: int, stride: int, tta_every: int) -> Optional[Dict[str, Any]]:
+        loop = asyncio.get_event_loop()
 
-            except Exception as e:
-                print(f"[UnifiedDetector][ERROR] PII detection failed: {e}")
-                results["models"]["pii"] = {"error": str(e)}
-
-        
-        # Process with plate detector
-        if "plate" in self.models:
-            try:
+        def plate_task():
+            with self.model_locks["plate"]:
                 start_time = time.time()
                 plate_frame_id, plate_rectangles = self.models["plate"].process_frame(frame, frame_id)
                 end_time = time.time()
-                print(f"[UnifiedDetector] Plate detection time: {end_time - start_time:.5f}s")
-                results["models"]["plate"] = {
+                print(f"[UnifiedDetector] Plate detection time: {end_time - start_time:.5f}s for frame {frame_id}")
+                return "plate", {
                     "frame_id": plate_frame_id,
                     "rectangles": plate_rectangles,
                     "count": len(plate_rectangles)
-                }
-            except Exception as e:
-                print(f"[UnifiedDetector][ERROR] Plate detection failed: {e}")
-                results["models"]["plate"] = {"error": str(e)}
+                }    
         
-        return results
+        return await loop.run_in_executor(self.executor, plate_task)
+    
+    def process_frame(self, frame: np.ndarray, frame_id: int, stride: int = 1, tta_every: int = 0) -> Dict[str, Any]:
+        """
+        Synchronous wrapper to process a frame with all enabled models.
+        
+        Args:
+            frame: Input frame (BGR format)
+            frame_id: Frame identifier
+            
+        Returns:
+            Dictionary containing results from all models
+        """
+        print("[UnifiedDetector] Processing frame", frame_id)
+        return asyncio.run(self.process_frame_async(frame, frame_id, stride, tta_every))
     
     def get_all_rectangles(self, results: Dict[str, Any]) -> List[List[int]]:
         """
