@@ -259,7 +259,7 @@ def filter_frame(frame, frame_id=0, blur_only=False, provided_rectangles=None, r
             print(f"[API] ⚠️  No embedding found for room {room_id} (available: {list(room_embeddings.keys())})")
         
         print(f"[API] Full detection mode: processing frame {frame_id}")
-        results = detector.process_frame(frame, frame_id, stride=DETECTION_STRIDE)
+        results = detector.process_frame(frame, frame_id, stride=DETECTION_STRIDE, room_id=room_id)
         
         # Extract rectangles from detection results
         for model_name in ["face", "plate", "pii"]:
@@ -879,11 +879,11 @@ def detect_faces_and_mouths():
             # STAGE 1: Get face blur regions and mouth landmarks
             start_time = time.time()
             frame_id_result, face_blur_regions, mouth_regions = detector.process_frame_with_mouth_landmarks(
-                frame, frame_id, stride=1
+                frame, frame_id, stride=1, room_id=room_id
             )
             
             # STAGE 2: Get PII and plate detections (run full unified detection)
-            full_results = detector.process_frame(frame, frame_id, stride=1)
+            full_results = detector.process_frame(frame, frame_id, stride=1, room_id=room_id)
             
             # Extract PII and plate rectangles from full results
             pii_regions = []
@@ -1095,6 +1095,30 @@ def apply_strong_mouth_blur(frame, mouth_bbox):
             # Very strong blur for mouth (higher than face blur)
             blurred = cv2.blur(roi, (150, 150))
             frame[y1:y2, x1:x2] = blurred
+
+@app.route('/cleanup-room/<room_id>', methods=['POST'])
+def cleanup_room_endpoint(room_id: str):
+    """Clean up all room-specific data."""
+    global detector, room_embeddings
+    
+    try:
+        # Clean up face detector room data
+        if detector:
+            detector.cleanup_room(room_id)
+        
+        # Clean up embeddings
+        if room_id in room_embeddings:
+            del room_embeddings[room_id]
+            print(f"[API] Cleaned up embedding for room: {room_id}")
+            
+        return jsonify({
+            "success": True,
+            "message": f"Cleaned up all data for room {room_id}"
+        })
+        
+    except Exception as e:
+        print(f"[API] ❌ Room cleanup error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/transfer-embedding', methods=['POST'])
 def transfer_embedding():

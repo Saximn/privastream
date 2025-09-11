@@ -861,6 +861,17 @@ io.on('connection', socket => {
           console.error('[SERVER] Error cleaning up audio redaction:', error);
         }
         
+        // Clean up video processing room data
+        try {
+          if (fetch) {
+            fetch(`${API_CONFIG.VIDEO_API_URL}/cleanup-room/${roomId}`, {
+              method: 'POST'
+            }).catch(err => console.error('[SERVER] Video cleanup failed:', err));
+          }
+        } catch (error) {
+          console.error('[SERVER] Error calling video cleanup:', error);
+        }
+        
         // Clean up audio timing tracking
         audioChunkStartTimes.delete(roomId);
         

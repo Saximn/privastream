@@ -140,7 +140,7 @@ class UnifiedBlurDetector:
                 print(f"[UnifiedDetector] 🔥 Warmup round {round_num+1}/3, frame {i+1}/4:{warmup_time:.3f}s")
         print("[UnifiedDetector] ✅ Advanced warm-up complete - models should be fully optimized")
     
-    def process_frame(self, frame: np.ndarray, frame_id: int, stride: int = 1, tta_every: int = 0) -> Dict[str, Any]:
+    def process_frame(self, frame: np.ndarray, frame_id: int, stride: int = 1, tta_every: int = 0, room_id: str = None) -> Dict[str, Any]:
         """
         Process a frame with all enabled models.
         
@@ -161,7 +161,7 @@ class UnifiedBlurDetector:
         if "face" in self.models:
             try:
                 start_time = time.time()
-                face_frame_id, face_rectangles = self.models["face"].process_frame(frame, frame_id, stride, tta_every)
+                face_frame_id, face_rectangles = self.models["face"].process_frame(frame, frame_id, stride, tta_every, room_id=room_id)
                 end_time = time.time()
                 print(f"[UnifiedDetector] Face detection time: {end_time - start_time:.5f}s for frame {frame_id}")
                 results["models"]["face"] = {
@@ -297,9 +297,29 @@ class UnifiedBlurDetector:
         else:
             print("[UnifiedDetector][WARN] Face detector not available for embedding update")
             return False
+    
+    def cleanup_room(self, room_id: str) -> bool:
+        """
+        Clean up room-specific data from all models.
+        
+        Args:
+            room_id: Room ID to clean up
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            if "face" in self.models:
+                self.models["face"].cleanup_room(room_id)
+            
+            print(f"[UnifiedDetector] Cleaned up data for room: {room_id}")
+            return True
+        except Exception as e:
+            print(f"[UnifiedDetector][ERROR] Failed to cleanup room {room_id}: {e}")
+            return False
 
     def process_frame_with_mouth_landmarks(self, frame: np.ndarray, frame_id: int, 
-                                         stride: int = 1) -> Tuple[int, List[List[int]], List[Dict]]:
+                                         stride: int = 1, room_id: str = None) -> Tuple[int, List[List[int]], List[Dict]]:
         """
         Enhanced frame processing that returns both face blur regions and mouth landmarks.
         Routes to the face detector's mouth landmark extraction method.
@@ -314,11 +334,11 @@ class UnifiedBlurDetector:
         """
         if "face" in self.models:
             try:
-                return self.models["face"].process_frame_with_mouth_landmarks(frame, frame_id, stride)
+                return self.models["face"].process_frame_with_mouth_landmarks(frame, frame_id, stride, room_id=room_id)
             except Exception as e:
                 print(f"[UnifiedDetector][ERROR] Mouth landmark processing failed: {e}")
                 # Fallback: return regular face processing with empty mouths
-                regular_result = self.models["face"].process_frame(frame, frame_id, stride)
+                regular_result = self.models["face"].process_frame(frame, frame_id, stride, room_id=room_id)
                 return regular_result[0], regular_result[1], []  # frame_id, rectangles, empty mouths
         else:
             print("[UnifiedDetector][WARN] Face detector not available for mouth landmarks")

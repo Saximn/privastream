@@ -52,9 +52,9 @@ class FaceDetector:
         self.app = FaceAnalysis(name="buffalo_s")
         self.app.prepare(ctx_id=self.ctx_id, det_size=(det_size, det_size))
         
-        # Temporal tracking
-        self.masks = []  # (expiry_time, box)
-        self.vote_buf = deque(maxlen=5)  # temporal vote for whitelist decision (longer buffer for stability)
+        # Per-room temporal tracking (fixes cross-room contamination)
+        self.room_masks = {}      # roomId -> [(expiry_time, box)]
+        self.room_vote_bufs = {}  # roomId -> deque
         self.panic_mode = False
         
         print(f"[FaceDetector] Initialized with ctx_id={self.ctx_id}")
@@ -103,8 +103,9 @@ class FaceDetector:
             if embedding is not None and len(embedding) > 0:
                 self.creator_embedding = np.array(embedding, dtype=float)
                 print(f"[FaceDetector] ✅ Set dynamic embedding from memory (shape: {self.creator_embedding.shape})")
-                # Reset vote buffer when embedding changes
-                self.vote_buf.clear()
+                # Reset all room vote buffers when embedding changes
+                for room_id in self.room_vote_bufs:
+                    self.room_vote_bufs[room_id].clear()
                 return True
             else:
                 print("[FaceDetector][WARN] Invalid embedding provided.")
@@ -112,6 +113,21 @@ class FaceDetector:
         except Exception as e:
             print(f"[FaceDetector][WARN] Dynamic embedding failed: {e}")
             return False
+    
+    def _get_room_masks(self, room_id: str):
+        """Get or create temporal masks for specific room."""
+        if room_id not in self.room_masks:
+            self.room_masks[room_id] = []
+            self.room_vote_bufs[room_id] = deque(maxlen=5)
+        return self.room_masks[room_id], self.room_vote_bufs[room_id]
+    
+    def cleanup_room(self, room_id: str):
+        """Clean up room-specific data when room closes."""
+        if room_id in self.room_masks:
+            del self.room_masks[room_id]
+        if room_id in self.room_vote_bufs:
+            del self.room_vote_bufs[room_id]
+        print(f"[FaceDetector] Cleaned up temporal data for room: {room_id}")
     
     def set_panic_mode(self, panic: bool):
         """Toggle panic mode (blur entire frame)."""
@@ -192,7 +208,7 @@ class FaceDetector:
         return out
     
     def process_frame(self, frame: np.ndarray, frame_id: int, 
-                     stride: int = 1, tta_every: int = 0) -> Tuple[int, List[List[int]]]:
+                     stride: int = 1, tta_every: int = 0, room_id: str = None) -> Tuple[int, List[List[int]]]:
         """
         Process a single frame and return rectangles to be blurred.
         
@@ -281,14 +297,20 @@ class FaceDetector:
                         print(f"[FaceDetector] Error processing face {i}: {e}")
                         continue
                 
+                # Get room-specific vote buffer (defined later, will be moved up)
+                if room_id:
+                    _, room_vote_buf_temp = self._get_room_masks(room_id)
+                else:
+                    room_vote_buf_temp = deque(maxlen=5)
+                
                 # Update temporal voting with whether ANY face matched
                 any_match = len(creator_matches) > 0
-                self.vote_buf.append(any_match)
+                room_vote_buf_temp.append(any_match)
                 
                 # More stable voting: allow creator if at least 2 out of last 5 frames had a match
                 # Special case: if we have fewer than 3 frames, be more lenient (50% threshold)
-                vote_count = sum(self.vote_buf)
-                buffer_size = len(self.vote_buf)
+                vote_count = sum(room_vote_buf_temp)
+                buffer_size = len(room_vote_buf_temp)
                 
                 if buffer_size < 3:
                     # Be more lenient for initial frames: require at least 50% matches
@@ -317,12 +339,19 @@ class FaceDetector:
                 if should_blur:
                     new_boxes.append(self.dilate_box(box, W, H))
         
-        # Temporal smoothing: update mask list
-        expiry = now + self.smooth_ms / 1000.0
-        self.masks = [m for m in self.masks if m[0] > now] + [(expiry, b) for b in new_boxes]
+        # Get room-specific temporal data
+        if room_id:
+            room_masks, room_vote_buf = self._get_room_masks(room_id)
+        else:
+            # Fallback for legacy calls
+            room_masks, room_vote_buf = [], deque(maxlen=5)
         
-        # Return all active masks as rectangles
-        rectangles = [box for _, box in self.masks]
+        # Temporal smoothing: update ROOM-SPECIFIC mask list
+        expiry = now + self.smooth_ms / 1000.0
+        room_masks[:] = [m for m in room_masks if m[0] > now] + [(expiry, b) for b in new_boxes]
+        
+        # Return ONLY this room's active masks
+        rectangles = [box for _, box in room_masks]
         
         # Debug logging
         print(f"[FaceDetector] Frame {frame_id}: new_boxes={len(new_boxes)}, active_masks={len(rectangles)}")
@@ -407,7 +436,7 @@ class FaceDetector:
         return [mouth_x1, mouth_y1, mouth_x2, mouth_y2]
 
     def process_frame_with_mouth_landmarks(self, frame: np.ndarray, frame_id: int, 
-                                         stride: int = 1) -> Tuple[int, List[List[int]], List[Dict]]:
+                                         stride: int = 1, room_id: str = None) -> Tuple[int, List[List[int]], List[Dict]]:
         """
         Enhanced frame processing that returns both face blur regions and mouth landmarks.
         """
@@ -467,13 +496,19 @@ class FaceDetector:
                     print(f"[FaceDetector] Error processing face {i}: {e}")
                     continue
             
+            # Get room-specific vote buffer
+            if room_id:
+                _, room_vote_buf = self._get_room_masks(room_id)
+            else:
+                room_vote_buf = deque(maxlen=5)
+            
             # Update temporal voting with whether ANY face matched
             any_match = len(creator_matches) > 0
-            self.vote_buf.append(any_match)
+            room_vote_buf.append(any_match)
             
             # Voting logic
-            vote_count = sum(self.vote_buf)
-            buffer_size = len(self.vote_buf)
+            vote_count = sum(room_vote_buf)
+            buffer_size = len(room_vote_buf)
             
             if buffer_size < 3:
                 creator_allowed = vote_count >= max(1, buffer_size // 2)
@@ -493,10 +528,17 @@ class FaceDetector:
                 new_boxes.append(self.dilate_box(box, W, H))
                 print(f"[FaceDetector] Face {i} will be blurred")
         
-        # Temporal smoothing for face regions
+        # Get room-specific temporal data
+        if room_id:
+            room_masks, _ = self._get_room_masks(room_id)
+        else:
+            # Fallback for legacy calls
+            room_masks = []
+        
+        # Temporal smoothing for ROOM-SPECIFIC face regions
         expiry = now + self.smooth_ms / 1000.0
-        self.masks = [m for m in self.masks if m[0] > now] + [(expiry, b) for b in new_boxes]
-        rectangles = [box for _, box in self.masks]
+        room_masks[:] = [m for m in room_masks if m[0] > now] + [(expiry, b) for b in new_boxes]
+        rectangles = [box for _, box in room_masks]
         
         print(f"[FaceDetector] Frame {frame_id}: faces={len(faces)}, mouths={len(mouth_regions)}, blur_regions={len(rectangles)}")
         
