@@ -349,7 +349,7 @@ export default function Host() {
       } catch (error) {
         console.error("[DEBUG] Frame processing error:", error);
       }
-    }, 100); // 4 FPS
+    }, 50); // 4 FPS
 
     console.log("[DEBUG] Frame processing started");
   };
