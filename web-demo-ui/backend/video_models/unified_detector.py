@@ -149,7 +149,7 @@ class UnifiedBlurDetector:
                 print(f"[UnifiedDetector] 🔥 Warmup round {round_num+1}/3, frame {i+1}/4:{warmup_time:.3f}s")
         print("[UnifiedDetector] ✅ Advanced warm-up complete - models should be fully optimized")
     
-    async def process_frame_async(self, frame: np.ndarray, frame_id: int, stride: int = 1, tta_every: int = 0) -> Dict[str, Any]:
+    async def process_frame_async(self, frame: np.ndarray, frame_id: int, stride: int = 1, tta_every: int = 0, room_id: str = None) -> Dict[str, Any]:
         """
         Process a frame with all enabled models.
         
@@ -169,7 +169,7 @@ class UnifiedBlurDetector:
         tasks = []
 
         if "face" in self.models:
-            tasks.append(self._process_face_model_async("face", frame, frame_id, stride, tta_every))
+            tasks.append(self._process_face_model_async("face", frame, frame_id, stride, tta_every, room_id=room_id))
 
         if "pii" in self.models:
             tasks.append(self._process_pii_model_async("pii", frame, frame_id, stride, tta_every))
@@ -190,7 +190,7 @@ class UnifiedBlurDetector:
         print(f"[UnifiedDetector] Frame {frame_id} processed with results: {results}")
         return results
 
-    async def _process_face_model_async(self, model_name: str, frame: np.ndarray, frame_id: int, stride: int, tta_every: int) -> Optional[Dict[str, Any]]:
+    async def _process_face_model_async(self, model_name: str, frame: np.ndarray, frame_id: int, stride: int, tta_every: int, room_id: str = None) -> Optional[Dict[str, Any]]:
         loop = asyncio.get_event_loop()
 
         def face_task():
@@ -241,7 +241,7 @@ class UnifiedBlurDetector:
         
         return await loop.run_in_executor(self.executor, plate_task)
     
-    def process_frame(self, frame: np.ndarray, frame_id: int, stride: int = 1, tta_every: int = 0) -> Dict[str, Any]:
+    def process_frame(self, frame: np.ndarray, frame_id: int, stride: int = 1, tta_every: int = 0, room_id: str = None) -> Dict[str, Any]:
         """
         Synchronous wrapper to process a frame with all enabled models.
         
