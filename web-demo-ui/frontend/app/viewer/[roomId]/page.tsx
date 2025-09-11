@@ -210,6 +210,11 @@ export default function Viewer() {
     const setupEventHandlers = () => {
       if (!sfuSocketRef.current) return;
 
+      sfuSocketRef.current.on("host-streaming-started", (data: any) => {
+        console.log("[VIEWER] Host started streaming:", data);
+        setStats((prev) => ({ ...prev, hostStreaming: true }));
+      });
+
       // Handle new producers (but skip audio producers since we use processed audio)
       sfuSocketRef.current.on("new-producer", (data: any) => {
         console.log("[VIEWER] New producer:", data);
@@ -612,7 +617,7 @@ export default function Viewer() {
           <div className="max-w-7xl mx-auto">
             <div className="text-center mb-8">
               <h1 className="text-4xl font-bold mb-2 text-black dark:text-white">
-                Loading VirtualSecure...
+                Loading PrivaStream...
               </h1>
               <p className="text-gray-600 dark:text-gray-400">
                 Initializing secure connection
@@ -641,7 +646,7 @@ export default function Viewer() {
           {/* Header */}
           <div className="text-center mb-8">
             <h1 className="text-4xl font-bold mb-2 text-black dark:text-white">
-              VirtualSecure Stream Viewer
+              PrivaStream Stream Viewer
             </h1>
             <p className="text-gray-600 dark:text-gray-400">
               Secure viewing with privacy protection

@@ -269,14 +269,14 @@ export default function EnrollmentPage() {
         enrollmentFramesRef.current.push(frame.split(",")[1]); // Remove data URL prefix
         const progress = enrollmentFramesRef.current.length;
         setEnrollmentProgress(progress);
-        console.log(`[ENROLLMENT] Progress: ${progress}/20 frames collected`);
+        console.log(`[ENROLLMENT] Progress: ${progress}/150 frames collected`);
       } else {
         console.log("[ENROLLMENT] Failed to capture frame");
       }
     };
 
-    // Collect 20 frames over 4 seconds (200ms intervals)
-    const frameInterval = setInterval(collectFrames, 200);
+    // Collect 150 frames over 6 seconds (40ms intervals)
+    const frameInterval = setInterval(collectFrames, 40);
     console.log("[ENROLLMENT] Started collecting frames...");
 
     setTimeout(async () => {
@@ -336,7 +336,7 @@ export default function EnrollmentPage() {
       }
 
       setIsEnrolling(false);
-    }, 4000); // 20 frames * 200ms = 4000ms
+    }, 6000); // 150 frames * 40ms = 6000ms
   };
 
   // Update face boxes when detections change
@@ -476,7 +476,7 @@ export default function EnrollmentPage() {
             <Card className="flex flex-col h-[700px] text-center shadow-xl border border-gray-200 dark:border-gray-700 w-full max-w-3xl mx-auto">
               <CardHeader className="pb-4">
                 <CardTitle className="text-2xl text-black dark:text-white">
-                  Welcome to VirtualSecure
+                  Welcome to PrivaStream
                 </CardTitle>
                 <CardDescription className="text-lg max-w-2xl mx-auto text-gray-600 dark:text-gray-400">
                   Protect your privacy while streaming with intelligent face
@@ -485,7 +485,7 @@ export default function EnrollmentPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6 flex-1 flex flex-col justify-center">
-                <div className="grid md:grid-cols-3 gap-4 text-left mx-auto">
+                <div className="grid md:grid-cols-2 gap-4 text-left mx-auto">
                   <div className="p-4 bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700">
                     <h3 className="font-semibold mb-2 text-black dark:text-white">
                       Face Capture
@@ -502,15 +502,6 @@ export default function EnrollmentPage() {
                     <p className="text-sm text-gray-600 dark:text-gray-400">
                       Non-whitelisted faces are automatically blurred in
                       real-time to protect viewer privacy.
-                    </p>
-                  </div>
-                  <div className="p-4 bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700">
-                    <h3 className="font-semibold mb-2 text-black dark:text-white">
-                      Trusted Access
-                    </h3>
-                    <p className="text-sm text-gray-600 dark:text-gray-400">
-                      Manage your whitelist to control exactly who appears
-                      clearly in your broadcasts.
                     </p>
                   </div>
                 </div>
@@ -606,12 +597,12 @@ export default function EnrollmentPage() {
                             </div>
                             <div className="flex justify-between text-sm mb-3">
                               <span>Collecting frames</span>
-                              <span className="font-medium">{enrollmentProgress}/20</span>
+                              <span className="font-medium">{enrollmentProgress}/150</span>
                             </div>
                             <div className="w-full bg-gray-200 rounded-full h-3 mb-2">
                               <div
                                 className="bg-blue-500 h-3 rounded-full transition-all duration-300 ease-out"
-                                style={{ width: `${Math.max(5, (enrollmentProgress / 20) * 100)}%` }}
+                                style={{ width: `${Math.max(5, (enrollmentProgress / 150) * 100)}%` }}
                               />
                             </div>
                             <div className="text-xs text-gray-600 mt-2">
@@ -893,30 +884,15 @@ export default function EnrollmentPage() {
                       </span>
                       Non-whitelisted faces will be blurred for privacy
                     </li>
-                    <li className="flex items-start gap-3">
-                      <span className="text-black dark:text-white font-medium">
-                        •
-                      </span>
-                      You can manage your whitelist settings anytime
-                    </li>
+
                   </ul>
                 </div>
               </CardContent>
-              <div className="flex justify-between px-6 pb-6 mt-auto">
-                <Button
-                  onClick={() => {
-                    setEnrollmentStep("intro");
-                    form.reset();
-                    setCapturedPhotos([]);
-                  }}
-                  variant="outline"
-                  className="border-gray-300 text-black hover:bg-gray-100 dark:border-gray-600 dark:text-white dark:hover:bg-gray-800"
-                >
-                  Enroll Another Person
-                </Button>
+              <div className="flex px-6 pb-6 mt-auto">
+
                 <Button
                   onClick={createRoom}
-                  className="bg-black text-white hover:bg-gray-800 dark:bg-white dark:text-black dark:hover:bg-gray-200"
+                  className="ml-auto bg-black text-white hover:bg-gray-800 dark:bg-white dark:text-black dark:hover:bg-gray-200"
                 >
                   Start Streaming →
                 </Button>

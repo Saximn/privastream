@@ -451,7 +451,7 @@ export default function Host() {
           {/* Header */}
           <div className="text-center mb-8 relative">
             <h1 className="text-4xl font-bold mb-2 text-black dark:text-white">
-              VirtualSecure Stream Host
+              PrivaStream Stream Host
             </h1>
             <p className="text-gray-600 dark:text-gray-400">
               Professional streaming with privacy protection
@@ -466,31 +466,7 @@ export default function Host() {
                 </div>
               )}
               
-              {/* Privacy Filter Toggle */}
-              <div className="flex items-center gap-3 p-3 bg-gray-100 dark:bg-gray-800 rounded-lg">
-                <div className="text-sm text-gray-600 dark:text-gray-400">
-                  Privacy Filter
-                </div>
-                <button
-                  onClick={() => setIsVideoFilterEnabled(!isVideoFilterEnabled)}
-                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 ${
-                    isVideoFilterEnabled
-                      ? "bg-green-500 focus:ring-green-500"
-                      : "bg-gray-300 focus:ring-gray-500"
-                  }`}
-                  role="switch"
-                  aria-checked={isVideoFilterEnabled}
-                >
-                  <span
-                    className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-lg transition-transform ${
-                      isVideoFilterEnabled ? "translate-x-6" : "translate-x-1"
-                    }`}
-                  />
-                </button>
-                <div className="text-xs text-gray-500 dark:text-gray-400">
-                  {isVideoFilterEnabled ? "ON" : "OFF"}
-                </div>
-              </div>
+
             </div>
           </div>
 
@@ -662,33 +638,7 @@ export default function Host() {
 
                   {/* PII Detection & Room ID Row */}
                   <div className="grid grid-cols-1 gap-4">
-                    <div className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 p-4 rounded-lg">
-                      <h3 className="font-medium text-black dark:text-white text-sm mb-2">
-                        PII Detection
-                      </h3>
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <div
-                            className={`w-3 h-3 rounded-full ${
-                              isPIIDetectionEnabled
-                                ? "bg-green-500"
-                                : "bg-red-500"
-                            }`}
-                          />
-                          <span className="text-sm text-black dark:text-white font-medium">
-                            {isPIIDetectionEnabled ? "Active" : "Inactive"}
-                          </span>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-2xl font-bold text-black dark:text-white">
-                            {totalPIIDetected}
-                          </div>
-                          <div className="text-xs text-gray-600 dark:text-gray-400">
-                            detected
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+
 
                     <div className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 p-4 rounded-lg">
                       <h3 className="font-medium text-black dark:text-white text-sm mb-2">
@@ -710,9 +660,7 @@ export default function Host() {
                   </div>
                 </div>
               </div>
-
             </div>
-
           </div>
         </div>
       </main>
