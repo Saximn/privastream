@@ -508,6 +508,7 @@ io.on('connection', socket => {
         timestamp: room.streamStartTime
       });
     }
+    console.log("[SERVER] Viewer joined room:", data.roomId, "Total viewers:", room.viewers.size);
 
     // Notify viewer of existing producers
     const existingProducers = Array.from(room.hostProducers.entries()).map(([kind, producer]) => ({

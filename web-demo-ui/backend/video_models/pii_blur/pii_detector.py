@@ -23,7 +23,7 @@ DEVICE = "cuda" if TORCH_OK and torch.cuda.is_available() else "cpu"
 class OCRPipeline:
     """Unified OCR interface supporting docTR and EasyOCR."""
     
-    def __init__(self, det_arch: str = "db_mobilenet_v3_large", reco_arch: str = "crnn_mobilenet_v3_small"):
+    def __init__(self, det_arch: str = "fast_small", reco_arch: str = "crnn_mobilenet_v3_small"):
         """
         Initialize OCR pipeline.
         
@@ -262,8 +262,8 @@ class PIIDetector:
                  min_area: int = 80,
                  K_confirm: int = 2,
                  K_hold: int = 8,
-                 det_arch: str = "db_resnet50",
-                 reco_arch: str = "parseq"):
+                 det_arch: str = "fast_small",
+                 reco_arch: str = "crnn_mobilenet_v3_small"):
         """
         Initialize PII detector.
         

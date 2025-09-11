@@ -14,7 +14,7 @@ export default function Host() {
   const [connectionState, setConnectionState] = useState("");
 
   // Video Filtering State
-  const [isVideoFilterEnabled, setIsVideoFilterEnabled] = useState(false);
+  const [isVideoFilterEnabled, setIsVideoFilterEnabled] = useState(true);
   const [videoFilterStats, setVideoFilterStats] = useState<any>(null);
   const [isPIIDetectionEnabled, setIsPIIDetectionEnabled] = useState(false);
   const [totalPIIDetected, setTotalPIIDetected] = useState(0);
@@ -349,7 +349,7 @@ export default function Host() {
       } catch (error) {
         console.error("[DEBUG] Frame processing error:", error);
       }
-    }, 50); // 4 FPS
+    }, 100); // 4 FPS
 
     console.log("[DEBUG] Frame processing started");
   };

@@ -106,6 +106,39 @@ class UnifiedBlurDetector:
         for _ in range(10):
             self.process_frame(dummy_frame, frame_id=-1)
         print("[UnifiedDetector] Engine warmed up with dummy frame")
+              # STAGE 2: Real-content warm-up (NEW - this is what you need)
+        self._advanced_warmup()
+
+    def _advanced_warmup(self):
+        """Advanced warm-up with realistic content and varied sizes."""
+        print("[UnifiedDetector] 🔥 Starting advanced warm-up with realistic content...")
+
+        # Create varied frames with actual content
+        warmup_frames = []
+
+        # Different sizes (common webcam/phone resolutions)
+        sizes = [(480, 640), (720, 1280), (1080, 1920), (480, 480)]
+
+        for i, (h, w) in enumerate(sizes):
+            # Create frame with realistic content
+            frame = np.random.randint(0, 255, (h, w, 3), dtype=np.uint8)
+
+            # Add some geometric shapes (simulates faces/objects)
+            cv2.rectangle(frame, (w//4, h//4), (w//2, h//2), (255, 255, 255), -1)
+            cv2.circle(frame, (3*w//4, h//4), 50, (128, 128, 128), -1)
+
+            # Add some text-like patterns (simulates PII)
+            cv2.putText(frame, "ABC123", (w//2, 3*h//4), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 0),3)
+            warmup_frames.append(frame)
+
+        # Process varied frames multiple times
+        for round_num in range(3):  # 3 rounds
+            for i, frame in enumerate(warmup_frames):
+                start_time = time.time()
+                results = self.process_frame(frame, frame_id=f"warmup_{round_num}_{i}")
+                warmup_time = time.time() - start_time
+                print(f"[UnifiedDetector] 🔥 Warmup round {round_num+1}/3, frame {i+1}/4:{warmup_time:.3f}s")
+        print("[UnifiedDetector] ✅ Advanced warm-up complete - models should be fully optimized")
     
     def process_frame(self, frame: np.ndarray, frame_id: int, stride: int = 1, tta_every: int = 0) -> Dict[str, Any]:
         """
@@ -130,7 +163,7 @@ class UnifiedBlurDetector:
                 start_time = time.time()
                 face_frame_id, face_rectangles = self.models["face"].process_frame(frame, frame_id, stride, tta_every)
                 end_time = time.time()
-                print(f"[UnifiedDetector] Face detection time: {end_time - start_time:.5f}s")
+                print(f"[UnifiedDetector] Face detection time: {end_time - start_time:.5f}s for frame {frame_id}")
                 results["models"]["face"] = {
                     "frame_id": face_frame_id,
                     "rectangles": face_rectangles,

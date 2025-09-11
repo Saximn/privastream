@@ -62,18 +62,23 @@ export default function Viewer() {
 
     const initializeViewer = async () => {
       try {
+        // Set up event handlers
         setError("");
         setConnectionState("connecting");
         console.log("[VIEWER] Initializing for room:", roomId);
-
+        
         // Connect to SFU server
         console.log("[VIEWER] Connecting to SFU server...");
         sfuSocketRef.current = io(API_CONFIG.SFU_URL, {
-		      path:"/mediasoup/socket.io",
+          path:"/mediasoup/socket.io",
           transports: ["websocket"],
           reconnectionAttempts: 3
         });
-
+        
+        setupEventHandlers();
+        setupProcessedFrameHandlers();
+        setupAudioHandlers();
+        
         await new Promise<void>((resolve) => {
           sfuSocketRef.current!.on("connect", () => {
             console.log("[VIEWER] Connected to SFU server");
@@ -167,10 +172,7 @@ export default function Viewer() {
 
         console.log("[VIEWER] Consumer transport created");
 
-        // Set up event handlers
-        setupEventHandlers();
-        setupProcessedFrameHandlers();
-        setupAudioHandlers();
+
 
         // Request existing producers (but skip audio producers since we use processed audio)
         console.log("[VIEWER] Requesting existing producers...");

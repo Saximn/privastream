@@ -63,7 +63,7 @@ DEBUG_CONFIG = {
 # Request queue protection configuration
 QUEUE_CONFIG = {
     "max_request_age_ms": 1000,  # Drop requests older than 1 second
-    "max_concurrent_requests": 50,  # Limit concurrent processing to prevent GPU overload
+    "max_concurrent_requests": 10,  # Limit concurrent processing to prevent GPU overload
     "enable_request_dropping": True,  # Enable/disable request age checking
     "queue_monitoring": True  # Enable queue monitoring logs
 }
