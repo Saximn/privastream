@@ -15,7 +15,7 @@ class AudioRedactionProcessor {
     // Calculate buffer size for 3 seconds of audio
     // 16kHz * 1 channel * 2 bytes per sample * 3 seconds = 96,000 bytes
     this.bufferSize = this.options.sampleRate * this.options.channels * 2 * (this.options.bufferDurationMs / 1000);
-    this.pcmBuffer = Buffer.alloc(0);
+    this.roomBuffers = new Map(); // roomId -> Buffer (per-room audio buffers)
     this.processedProducers = new Map();
     
     // Sliding window: store previous chunks per room for context processing
@@ -217,16 +217,24 @@ class AudioRedactionProcessor {
    */
   async addAudioChunk(roomId, audioChunk) {
     try {
-      // Add to buffer
-      this.pcmBuffer = Buffer.concat([this.pcmBuffer, audioChunk]);
+      // Get or create room-specific buffer
+      if (!this.roomBuffers.has(roomId)) {
+        this.roomBuffers.set(roomId, Buffer.alloc(0));
+      }
       
-      console.log(`[AUDIO-REDACTION-PROCESSOR] Buffer status: ${this.pcmBuffer.length}/${this.bufferSize} bytes (${(this.pcmBuffer.length/this.bufferSize*100).toFixed(1)}%)`);
+      // Add to room-specific buffer
+      const roomBuffer = this.roomBuffers.get(roomId);
+      const updatedBuffer = Buffer.concat([roomBuffer, audioChunk]);
+      this.roomBuffers.set(roomId, updatedBuffer);
       
-      // Check if we have enough data (3 seconds worth)
-      if (this.pcmBuffer.length >= this.bufferSize) {
-        // Extract current 3-second chunk
-        const currentChunk = this.pcmBuffer.slice(0, this.bufferSize);
-        this.pcmBuffer = this.pcmBuffer.slice(this.bufferSize);
+      console.log(`[AUDIO-REDACTION-PROCESSOR] Room ${roomId} buffer status: ${updatedBuffer.length}/${this.bufferSize} bytes (${(updatedBuffer.length/this.bufferSize*100).toFixed(1)}%)`);
+      
+      // Check if we have enough data (3 seconds worth) for this room
+      if (updatedBuffer.length >= this.bufferSize) {
+        // Extract current 3-second chunk from room buffer
+        const currentChunk = updatedBuffer.slice(0, this.bufferSize);
+        const remainingBuffer = updatedBuffer.slice(this.bufferSize);
+        this.roomBuffers.set(roomId, remainingBuffer);
         
         // Get previous chunk for sliding window
         const previousChunk = this.previousChunks.get(roomId);
@@ -282,8 +290,11 @@ class AudioRedactionProcessor {
         console.log('[AUDIO-REDACTION-PROCESSOR] Cleared previous chunk context for room:', roomId);
       }
       
-      // Reset buffer for this room (in a real implementation, you'd have per-room buffers)
-      this.pcmBuffer = Buffer.alloc(0);
+      // Clean up room-specific buffer
+      if (this.roomBuffers.has(roomId)) {
+        this.roomBuffers.delete(roomId);
+        console.log('[AUDIO-REDACTION-PROCESSOR] Cleared audio buffer for room:', roomId);
+      }
       
     } catch (error) {
       console.error('[AUDIO-REDACTION-PROCESSOR] Error during cleanup:', error);
