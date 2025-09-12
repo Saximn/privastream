@@ -1,0 +1,52 @@
+# Default configuration for Privastream
+# This file contains the default settings that can be overridden
+
+# Model Configuration
+models:
+  face:
+    threshold: 0.35
+    dilate_px: 12
+    smooth_ms: 300
+  
+  plate:
+    confidence: 0.25
+    
+  pii:
+    confidence: 0.35
+    confirmation_frames: 2
+    hold_frames: 8
+
+# Processing Configuration  
+processing:
+  target_fps: 30
+  detection_size: 960
+  max_workers: 4
+  use_gpu: true
+  gpu_id: 0
+
+# Web Configuration
+web:
+  flask_host: "0.0.0.0"
+  flask_port: 5000
+  flask_debug: false
+  mediasoup_port: 3001
+  frontend_port: 3000
+
+# Blur Configuration
+blur:
+  gaussian_kernel: 35
+  face_kernel: 35
+  plate_kernel: 35
+  pii_kernel: 35
+
+# Audio Configuration  
+audio:
+  chunk_seconds: 5
+  whisper_model: "base"
+  sample_rate: 16000
+
+# Logging Configuration
+logging:
+  level: "INFO"
+  file: null
+  format: "[%(asctime)s] %(levelname)s in %(name)s: %(message)s"

@@ -1,0 +1,21 @@
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.8.0
+transformers>=4.35.0
+datasets>=2.13.0
+librosa>=0.10.0
+soundfile>=0.12.1
+numpy>=1.24.0
+Flask==2.3.3
+flask-cors>=4.0.0
+pydub==0.25.1
+requests>=2.25.0
+
+# Faster-Whisper for balanced performance
+faster-whisper>=0.10.0
+ctranslate2>=3.24.0
+
+# Real-time VAD for silence detection
+webrtcvad>=2.0.10
+
+# Async processing
+asyncio

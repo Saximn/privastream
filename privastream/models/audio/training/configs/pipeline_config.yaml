@@ -1,0 +1,63 @@
+# Pipeline Configuration for Livestream PII Detection and Redaction
+
+# Whisper Model Configuration
+whisper:
+  model_name: "large-v3"  # Best Whisper model for accuracy
+  device: "cuda"  # or "cpu" if no GPU available
+  fp16: true  # Use half precision for faster inference
+  compute_type: "float16"
+  language: "en"  # Set to auto for auto-detection or specific language
+  
+# Audio Processing Configuration  
+audio:
+  sample_rate: 16000  # Whisper's expected sample rate
+  chunk_duration: 5.0  # Process audio in 5-second chunks
+  buffer_size: 1024
+  channels: 1  # Mono audio
+  overlap_duration: 1.0  # Overlap between chunks to avoid word cutoff
+  
+# DeBERTa PII Detection Configuration
+deberta:
+  model_path: "./models/"  # Path to trained DeBERTa models
+  tokenizer_name: "microsoft/deberta-v3-large"
+  max_length: 512
+  stride: 128  # For handling long texts
+  device: "cuda"
+  confidence_threshold: 0.7  # Minimum confidence for PII detection
+  
+# PII Categories to detect and redact
+pii_categories:
+  - "NAME_STUDENT"
+  - "EMAIL" 
+  - "USERNAME"
+  - "PHONE_NUM"
+  - "URL_PERSONAL"
+  - "STREET_ADDRESS"
+  - "ID_NUM"
+  - "NAME_INSTRUCTOR"
+  - "B-NAME_STUDENT"
+  - "I-NAME_STUDENT"
+  - "B-EMAIL"
+  - "I-EMAIL"
+  
+# Processing Configuration
+processing:
+  batch_size: 8
+  num_workers: 2
+  max_queue_size: 100
+  processing_timeout: 10.0  # seconds
+  
+# Output Configuration  
+output:
+  save_transcripts: true
+  save_redacted_text: true
+  save_timestamps: true
+  output_format: "json"
+  log_level: "INFO"
+  
+# Performance Configuration
+performance:
+  enable_gpu: true
+  memory_limit_gb: 8
+  max_concurrent_streams: 4
+  cleanup_interval: 60  # Clean up old data every 60 seconds

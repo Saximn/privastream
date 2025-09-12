@@ -1,0 +1,29 @@
+# Mediasoup Server Dockerfile for Privastream
+FROM node:18-alpine
+
+# Set working directory
+WORKDIR /app
+
+# Install required system dependencies
+RUN apk add --no-cache \
+    make \
+    gcc \
+    g++ \
+    python3 \
+    linux-headers
+
+# Copy package files
+COPY privastream/web/mediasoup/package*.json ./
+
+# Install dependencies
+RUN npm ci --only=production
+
+# Copy mediasoup server source
+COPY privastream/web/mediasoup/ ./
+
+# Expose ports
+EXPOSE 3001
+EXPOSE 40000-40100/udp
+
+# Start the mediasoup server
+CMD ["npm", "start"]
