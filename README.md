@@ -24,7 +24,7 @@ A **production-ready, real-time privacy filter** for Tiktok livestreams and acro
 - 🎥 **Real-time Video PII Blur**
 
   - **Face detection** with whitelist support
-  - **License plate detection** (96.47% mAP50)
+  - **License plate detection** (97.62% mAP50)
   - **Text PII blur** (OCR + ML classification)
 
 - 🎵 **Audio PII Detection**
@@ -153,7 +153,7 @@ privastream audio input.wav output.wav
 - **GPU**: NVIDIA A100/V100 or RTX 3090/4090
 - **RAM**: 32GB+
 - **CPU**: Multi-core (Intel i9/AMD Ryzen 7+)
-- **Network**: 1Gbps+ for streaming
+- **Network**: 200Mbps+ for streaming
 
 ## 🏁 Development Setup
 
