@@ -70,8 +70,8 @@ privastream/
 
 ```bash
 # Clone repository
-git clone https://github.com/Saximn/tiktok-techjam-2025.git
-cd tiktok-techjam-2025
+git clone https://github.com/Saximn/privastream.git
+cd privastream
 
 # Install package
 pip install -e .
