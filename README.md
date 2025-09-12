@@ -13,7 +13,9 @@
 
 **🔗 [View on Devpost](https://devpost.com/software/live-privacy-shield)**
 
-<img width="594" height="841" alt="Image" src="https://github.com/user-attachments/assets/7a2af9d1-bbbb-4c74-9932-2121115f463a" />
+<p align="center">
+  <img width="1188" height="1682" alt="Image" src="https://github.com/user-attachments/assets/358c3f07-6303-4ad2-95aa-803d03f62e5f" />
+</p>
 
 A **production-ready, real-time privacy filter** for Tiktok livestreams and across other platforms. PrivaStream detects and blurs personally identifiable information (PII) across **video** (faces, license plates, text) and **audio** (spoken PII), with temporal stabilization and scalable architecture.
 
