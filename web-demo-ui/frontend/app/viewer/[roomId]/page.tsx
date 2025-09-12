@@ -62,18 +62,23 @@ export default function Viewer() {
 
     const initializeViewer = async () => {
       try {
+        // Set up event handlers
         setError("");
         setConnectionState("connecting");
         console.log("[VIEWER] Initializing for room:", roomId);
-
+        
         // Connect to SFU server
         console.log("[VIEWER] Connecting to SFU server...");
         sfuSocketRef.current = io(API_CONFIG.SFU_URL, {
-		path:"/mediasoup/socket.io",
+          path:"/mediasoup/socket.io",
           transports: ["websocket"],
           reconnectionAttempts: 3
         });
-
+        
+        setupEventHandlers();
+        setupProcessedFrameHandlers();
+        setupAudioHandlers();
+        
         await new Promise<void>((resolve) => {
           sfuSocketRef.current!.on("connect", () => {
             console.log("[VIEWER] Connected to SFU server");
@@ -167,10 +172,7 @@ export default function Viewer() {
 
         console.log("[VIEWER] Consumer transport created");
 
-        // Set up event handlers
-        setupEventHandlers();
-        setupProcessedFrameHandlers();
-        setupAudioHandlers();
+
 
         // Request existing producers (but skip audio producers since we use processed audio)
         console.log("[VIEWER] Requesting existing producers...");
@@ -209,6 +211,11 @@ export default function Viewer() {
 
     const setupEventHandlers = () => {
       if (!sfuSocketRef.current) return;
+
+      sfuSocketRef.current.on("host-streaming-started", (data: any) => {
+        console.log("[VIEWER] Host started streaming:", data);
+        setStats((prev) => ({ ...prev, hostStreaming: true }));
+      });
 
       // Handle new producers (but skip audio producers since we use processed audio)
       sfuSocketRef.current.on("new-producer", (data: any) => {
@@ -612,7 +619,7 @@ export default function Viewer() {
           <div className="max-w-7xl mx-auto">
             <div className="text-center mb-8">
               <h1 className="text-4xl font-bold mb-2 text-black dark:text-white">
-                Loading VirtualSecure...
+                Loading PrivaStream...
               </h1>
               <p className="text-gray-600 dark:text-gray-400">
                 Initializing secure connection
@@ -641,7 +648,7 @@ export default function Viewer() {
           {/* Header */}
           <div className="text-center mb-8">
             <h1 className="text-4xl font-bold mb-2 text-black dark:text-white">
-              VirtualSecure Stream Viewer
+              PrivaStream Stream Viewer
             </h1>
             <p className="text-gray-600 dark:text-gray-400">
               Secure viewing with privacy protection

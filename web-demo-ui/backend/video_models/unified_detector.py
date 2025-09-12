@@ -10,6 +10,10 @@ from typing import List, Tuple, Dict, Any, Optional, Union
 import numpy as np
 import cv2
 
+import asyncio
+import concurrent.futures
+from threading import Lock
+
 # Add model directories to path
 sys.path.append(str(Path(__file__).parent / "face_blur"))
 sys.path.append(str(Path(__file__).parent / "pii_blur"))
@@ -49,6 +53,8 @@ class UnifiedBlurDetector:
         """
         self.config = config or {}
         self.models = {}
+        self.model_locks = {}
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
         
         # Initialize enabled models
         self._init_models()
@@ -67,6 +73,7 @@ class UnifiedBlurDetector:
                     dilate_px=face_config.get("dilate_px", 12),
                     smooth_ms=face_config.get("smooth_ms", 300)
                 )
+                self.model_locks["face"] = Lock()
                 print("[UnifiedDetector] Face detector initialized")
             except Exception as e:
                 print(f"[UnifiedDetector][WARN] Face detector initialization failed: {e}")
@@ -82,6 +89,7 @@ class UnifiedBlurDetector:
                     K_confirm=pii_config.get("K_confirm", 2),
                     K_hold=pii_config.get("K_hold", 8)
                 )
+                self.model_locks["pii"] = Lock()
                 print("[UnifiedDetector] PII detector initialized")
             except Exception as e:
                 print(f"[UnifiedDetector][WARN] PII detector initialization failed: {e}")
@@ -93,17 +101,55 @@ class UnifiedBlurDetector:
                 self.models["plate"] = PlateDetector(
                     weights_path=plate_config.get("weights_path", os.path.join(os.path.dirname(__file__), "plate_blur/best.pt")),
                     imgsz=plate_config.get("imgsz", 960),
-                    conf_thresh=plate_config.get("conf_thresh", 0.25),
+                    conf_thresh=plate_config.get("conf_thresh", 0.35),
                     iou_thresh=plate_config.get("iou_thresh", 0.5),
                     pad=plate_config.get("pad", 4)
                 )
+                self.model_locks["plate"] = Lock()
                 print("[UnifiedDetector] Plate detector initialized")
             except Exception as e:
                 print(f"[UnifiedDetector][WARN] Plate detector initialization failed: {e}")
         
         print(f"[UnifiedDetector] Initialized with {len(self.models)} models: {list(self.models.keys())}")
+        dummy_frame = np.zeros((640, 640, 3), dtype=np.uint8)
+        for _ in range(10):
+            self.process_frame(dummy_frame, frame_id=-1)
+        print("[UnifiedDetector] Engine warmed up with dummy frame")
+              # STAGE 2: Real-content warm-up (NEW - this is what you need)
+        self._advanced_warmup()
+
+    def _advanced_warmup(self):
+        """Advanced warm-up with realistic content and varied sizes."""
+        print("[UnifiedDetector] 🔥 Starting advanced warm-up with realistic content...")
+
+        # Create varied frames with actual content
+        warmup_frames = []
+
+        # Different sizes (common webcam/phone resolutions)
+        sizes = [(480, 640), (720, 1280), (1080, 1920), (480, 480)]
+
+        for i, (h, w) in enumerate(sizes):
+            # Create frame with realistic content
+            frame = np.random.randint(0, 255, (h, w, 3), dtype=np.uint8)
+
+            # Add some geometric shapes (simulates faces/objects)
+            cv2.rectangle(frame, (w//4, h//4), (w//2, h//2), (255, 255, 255), -1)
+            cv2.circle(frame, (3*w//4, h//4), 50, (128, 128, 128), -1)
+
+            # Add some text-like patterns (simulates PII)
+            cv2.putText(frame, "ABC123", (w//2, 3*h//4), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 0),3)
+            warmup_frames.append(frame)
+
+        # Process varied frames multiple times
+        for round_num in range(3):  # 3 rounds
+            for i, frame in enumerate(warmup_frames):
+                start_time = time.time()
+                results = self.process_frame(frame, frame_id=f"warmup_{round_num}_{i}")
+                warmup_time = time.time() - start_time
+                print(f"[UnifiedDetector] 🔥 Warmup round {round_num+1}/3, frame {i+1}/4:{warmup_time:.3f}s")
+        print("[UnifiedDetector] ✅ Advanced warm-up complete - models should be fully optimized")
     
-    def process_frame(self, frame: np.ndarray, frame_id: int, stride: int = 1, tta_every: int = 0) -> Dict[str, Any]:
+    async def process_frame_async(self, frame: np.ndarray, frame_id: int, stride: int = 1, tta_every: int = 0, room_id: str = None) -> Dict[str, Any]:
         """
         Process a frame with all enabled models.
         
@@ -120,49 +166,94 @@ class UnifiedBlurDetector:
             "models": {}
         }
         
-        # Process with face detector
+        tasks = []
+
         if "face" in self.models:
-            try:
-                face_frame_id, face_rectangles = self.models["face"].process_frame(frame, frame_id, stride, tta_every)
-                results["models"]["face"] = {
+            tasks.append(self._process_face_model_async("face", frame, frame_id, stride, tta_every, room_id=room_id))
+
+        if "pii" in self.models:
+            tasks.append(self._process_pii_model_async("pii", frame, frame_id, stride, tta_every, room_id=room_id))
+
+        if "plate" in self.models:
+            tasks.append(self._process_plate_model_async("plate", frame, frame_id, stride, tta_every))
+
+        model_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for result in model_results:
+            if isinstance(result, Exception):
+                print(f"[UnifiedDetector][ERROR] Model processing failed: {result}")
+                continue
+            if result:
+                model_type, model_data = result
+                results["models"][model_type] = model_data
+
+        print(f"[UnifiedDetector] Frame {frame_id} processed with results: {results}")
+        return results
+
+    async def _process_face_model_async(self, model_name: str, frame: np.ndarray, frame_id: int, stride: int, tta_every: int, room_id: str = None) -> Optional[Dict[str, Any]]:
+        loop = asyncio.get_event_loop()
+
+        def face_task():
+            with self.model_locks["face"]:
+                start_time = time.time()
+                face_frame_id, face_rectangles = self.models["face"].process_frame(frame, frame_id, stride, tta_every, room_id=room_id)
+                end_time = time.time()
+                print(f"[UnifiedDetector] Face detection time: {end_time - start_time:.5f}s for frame {frame_id}")
+                return "face", {
                     "frame_id": face_frame_id,
                     "rectangles": face_rectangles,
                     "count": len(face_rectangles)
                 }
-            except Exception as e:
-                print(f"[UnifiedDetector][ERROR] Face detection failed: {e}")
-                results["models"]["face"] = {"error": str(e)}
-        
-        # Process with PII detector
-        if "pii" in self.models:
-            try:
-                pii_frame_id, pii_rectangles = self.models["pii"].process_frame(frame, frame_id)
-                results["models"]["pii"] = {
+            
+        return await loop.run_in_executor(self.executor, face_task)
+    
+    async def _process_pii_model_async(self, model_name: str, frame: np.ndarray, frame_id: int, stride: int, tta_every: int, room_id: str = None) -> Optional[Dict[str, Any]]:
+        loop = asyncio.get_event_loop()
+
+        def pii_task():
+            with self.model_locks["pii"]:
+                start_time = time.time()
+                pii_frame_id, pii_rectangles = self.models["pii"].process_frame(frame, frame_id, room_id=room_id)
+                end_time = time.time()
+                print(f"[UnifiedDetector] PII detection time: {end_time - start_time:.5f}s for frame {frame_id}")
+                return "pii", {
                     "frame_id": pii_frame_id,
                     "rectangles": pii_rectangles,
                     "count": len(pii_rectangles)
                 }
-                print(f"[UnifiedTester] PII detections: {len(pii_rectangles)}")  # Debug print
+            
+        return await loop.run_in_executor(self.executor, pii_task)
+    
+    async def _process_plate_model_async(self, model_name: str, frame: np.ndarray, frame_id: int, stride: int, tta_every: int) -> Optional[Dict[str, Any]]:
+        loop = asyncio.get_event_loop()
 
-            except Exception as e:
-                print(f"[UnifiedDetector][ERROR] PII detection failed: {e}")
-                results["models"]["pii"] = {"error": str(e)}
-
-        
-        # Process with plate detector
-        if "plate" in self.models:
-            try:
+        def plate_task():
+            with self.model_locks["plate"]:
+                start_time = time.time()
                 plate_frame_id, plate_rectangles = self.models["plate"].process_frame(frame, frame_id)
-                results["models"]["plate"] = {
+                end_time = time.time()
+                print(f"[UnifiedDetector] Plate detection time: {end_time - start_time:.5f}s for frame {frame_id}")
+                return "plate", {
                     "frame_id": plate_frame_id,
                     "rectangles": plate_rectangles,
                     "count": len(plate_rectangles)
-                }
-            except Exception as e:
-                print(f"[UnifiedDetector][ERROR] Plate detection failed: {e}")
-                results["models"]["plate"] = {"error": str(e)}
+                }    
         
-        return results
+        return await loop.run_in_executor(self.executor, plate_task)
+    
+    def process_frame(self, frame: np.ndarray, frame_id: int, stride: int = 1, tta_every: int = 0, room_id: str = None) -> Dict[str, Any]:
+        """
+        Synchronous wrapper to process a frame with all enabled models.
+        
+        Args:
+            frame: Input frame (BGR format)
+            frame_id: Frame identifier
+            
+        Returns:
+            Dictionary containing results from all models
+        """
+        print("[UnifiedDetector] Processing frame", frame_id)
+        return asyncio.run(self.process_frame_async(frame, frame_id, stride, tta_every))
     
     def get_all_rectangles(self, results: Dict[str, Any]) -> List[List[int]]:
         """
@@ -251,9 +342,32 @@ class UnifiedBlurDetector:
         else:
             print("[UnifiedDetector][WARN] Face detector not available for embedding update")
             return False
+    
+    def cleanup_room(self, room_id: str) -> bool:
+        """
+        Clean up room-specific data from all models.
+        
+        Args:
+            room_id: Room ID to clean up
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            if "face" in self.models:
+                self.models["face"].cleanup_room(room_id)
+            
+            if "pii" in self.models:
+                self.models["pii"].cleanup_room(room_id)
+            
+            print(f"[UnifiedDetector] Cleaned up data for room: {room_id}")
+            return True
+        except Exception as e:
+            print(f"[UnifiedDetector][ERROR] Failed to cleanup room {room_id}: {e}")
+            return False
 
     def process_frame_with_mouth_landmarks(self, frame: np.ndarray, frame_id: int, 
-                                         stride: int = 1) -> Tuple[int, List[List[int]], List[Dict]]:
+                                         stride: int = 1, room_id: str = None) -> Tuple[int, List[List[int]], List[Dict]]:
         """
         Enhanced frame processing that returns both face blur regions and mouth landmarks.
         Routes to the face detector's mouth landmark extraction method.
@@ -268,11 +382,11 @@ class UnifiedBlurDetector:
         """
         if "face" in self.models:
             try:
-                return self.models["face"].process_frame_with_mouth_landmarks(frame, frame_id, stride)
+                return self.models["face"].process_frame_with_mouth_landmarks(frame, frame_id, stride, room_id=room_id)
             except Exception as e:
                 print(f"[UnifiedDetector][ERROR] Mouth landmark processing failed: {e}")
                 # Fallback: return regular face processing with empty mouths
-                regular_result = self.models["face"].process_frame(frame, frame_id, stride)
+                regular_result = self.models["face"].process_frame(frame, frame_id, stride, room_id=room_id)
                 return regular_result[0], regular_result[1], []  # frame_id, rectangles, empty mouths
         else:
             print("[UnifiedDetector][WARN] Face detector not available for mouth landmarks")

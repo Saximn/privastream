@@ -23,7 +23,7 @@ DEVICE = "cuda" if TORCH_OK and torch.cuda.is_available() else "cpu"
 class OCRPipeline:
     """Unified OCR interface supporting docTR and EasyOCR."""
     
-    def __init__(self, det_arch: str = "db_resnet50", reco_arch: str = "parseq"):
+    def __init__(self, det_arch: str = "fast_small", reco_arch: str = "crnn_mobilenet_v3_small"):
         """
         Initialize OCR pipeline.
         
@@ -262,8 +262,8 @@ class PIIDetector:
                  min_area: int = 80,
                  K_confirm: int = 2,
                  K_hold: int = 8,
-                 det_arch: str = "db_resnet50",
-                 reco_arch: str = "parseq"):
+                 det_arch: str = "fast_small",
+                 reco_arch: str = "crnn_mobilenet_v3_small"):
         """
         Initialize PII detector.
         
@@ -278,6 +278,8 @@ class PIIDetector:
         """
         self.conf_thresh = conf_thresh
         self.min_area = min_area
+        self.K_confirm = K_confirm
+        self.K_hold = K_hold
         
         # Initialize OCR pipeline
         self.ocr = OCRPipeline(det_arch=det_arch, reco_arch=reco_arch)
@@ -285,10 +287,26 @@ class PIIDetector:
         # Initialize PII decision engine
         self.decider = PIIDecider(classifier_path=classifier_path)
         
-        # Initialize temporal stabilization
-        self.stabilizer = Hysteresis(iou_thresh=0.3, K_confirm=K_confirm, K_hold=K_hold)
+        # Per-room temporal stabilization (fixes cross-room contamination)
+        self.room_stabilizers = {}  # roomId -> Hysteresis instance
         
-        print("[PIIDetector] Initialized")
+        print("[PIIDetector] Initialized with per-room temporal isolation")
+    
+    def _get_room_stabilizer(self, room_id: str) -> 'Hysteresis':
+        """Get or create temporal stabilizer for specific room."""
+        if room_id not in self.room_stabilizers:
+            self.room_stabilizers[room_id] = Hysteresis(
+                iou_thresh=0.3, 
+                K_confirm=self.K_confirm, 
+                K_hold=self.K_hold
+            )
+        return self.room_stabilizers[room_id]
+    
+    def cleanup_room(self, room_id: str):
+        """Clean up room-specific data when room closes."""
+        if room_id in self.room_stabilizers:
+            del self.room_stabilizers[room_id]
+        print(f"[PIIDetector] Cleaned up temporal data for room: {room_id}")
     
     def rect_from_box_norm(self, box: Tuple[Tuple[float, float], Tuple[float, float]], 
                           W: int, H: int) -> List[int]:
@@ -340,7 +358,7 @@ class PIIDetector:
         return rectangles
     
     def process_frame(self, frame: np.ndarray, frame_id: int, 
-                     blur_all: bool = False) -> Tuple[int, List[List[int]]]:
+                     blur_all: bool = False, room_id: str = None) -> Tuple[int, List[List[int]]]:
         """
         Process a single frame and return rectangles to be blurred.
         
@@ -348,6 +366,7 @@ class PIIDetector:
             frame: Input frame (BGR format)
             frame_id: Frame identifier
             blur_all: If True, blur all detected text
+            room_id: Room identifier for temporal isolation
             
         Returns:
             Tuple of (frame_id, list of rectangles as [x1, y1, x2, y2])
@@ -355,15 +374,28 @@ class PIIDetector:
         # Collect PII rectangles
         rectangles = self.collect_pii_rectangles(frame, blur_all=blur_all)
         
-        # Convert rectangles to polygons for stabilization (keeping existing stabilizer)
+        # Convert rectangles to polygons for stabilization
         polys = []
         for rect in rectangles:
             x1, y1, x2, y2 = rect
             poly = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.int32)
             polys.append(poly)
         
-        # Apply temporal stabilization
-        tracks = self.stabilizer.update(polys)
+        # Get room-specific stabilizer (fixes cross-room contamination)
+        if room_id:
+            stabilizer = self._get_room_stabilizer(room_id)
+        else:
+            # Fallback for legacy calls without room_id
+            if not hasattr(self, '_fallback_stabilizer'):
+                self._fallback_stabilizer = Hysteresis(
+                    iou_thresh=0.3, 
+                    K_confirm=self.K_confirm, 
+                    K_hold=self.K_hold
+                )
+            stabilizer = self._fallback_stabilizer
+        
+        # Apply ROOM-SPECIFIC temporal stabilization
+        tracks = stabilizer.update(polys)
         
         # Convert active polygons back to rectangles
         active_rectangles = []
@@ -375,6 +407,9 @@ class PIIDetector:
                 x2, y2 = int(xs.max()), int(ys.max())
                 active_rectangles.append([x1, y1, x2, y2])
         
+        # Debug logging
+        print(f"[PIIDetector] Frame {frame_id} room {room_id}: new_rects={len(rectangles)}, active_rects={len(active_rectangles)}")
+        
         return frame_id, active_rectangles
     
     def get_model_info(self) -> Dict[str, Any]:
@@ -384,8 +419,8 @@ class PIIDetector:
             "ocr_kind": self.ocr.kind,
             "conf_thresh": self.conf_thresh,
             "min_area": self.min_area,
-            "K_confirm": self.stabilizer.K_confirm,
-            "K_hold": self.stabilizer.K_hold,
+            "K_confirm": self.K_confirm,
+            "K_hold": self.K_hold,
             "has_ml_classifier": self.decider._clf is not None,
             "device": DEVICE
         }

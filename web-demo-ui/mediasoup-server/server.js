@@ -24,7 +24,7 @@ try {
 // TIMING CONFIGURATION - Easy to adjust
 const TIMING_CONFIG = {
   AUDIO_CHUNK_DURATION: 3000,      // Audio processing takes 3s
-  TOTAL_VIEWER_DELAY: 8000,        // Configurable total delay (can change to 5s later)
+  TOTAL_VIEWER_DELAY: 6000,        // Configurable total delay (can change to 5s later)
   PROCESSING_BUFFER: 100,          // Small buffer after audio completes (100ms)
   CACHE_CLEANUP_INTERVAL: 30000    // Cleanup every 30s
 };
@@ -386,7 +386,9 @@ io.on('connection', socket => {
       viewers: new Set(), 
       hostProducers: new Map(), 
       hostTransports: new Map(),
-      viewerTransports: new Map()
+      viewerTransports: new Map(),
+      isStreaming: false,
+      streamStartTime: null
     };
     rooms.set(roomId, room);
     socket.join(roomId);
@@ -499,6 +501,15 @@ io.on('connection', socket => {
     room.viewers.add(socket.id);
     socket.join(data.roomId);
     
+    // If host is already streaming, notify new viewer
+    if (room.isStreaming) {
+      socket.emit('host-streaming-started', {
+        roomId: room.id,
+        timestamp: room.streamStartTime
+      });
+    }
+    console.log("[SERVER] Viewer joined room:", data.roomId, "Total viewers:", room.viewers.size);
+
     // Notify viewer of existing producers
     const existingProducers = Array.from(room.hostProducers.entries()).map(([kind, producer]) => ({
       id: producer.id,
@@ -601,19 +612,18 @@ io.on('connection', socket => {
               const { roomId, frame, frameId, timestamp } = data;
               console.log('[VIDEO-SERVER] 🎯 Fast detection for frame', frameId, 'room:', roomId, 'timestamp:', timestamp);
               
-              // Notify viewers on first frame that host is streaming
-              if (!hasNotifiedViewers) {
-                const room = rooms.get(roomId);
-                if (room && room.viewers.size > 0) {
-                  room.viewers.forEach(viewerId => {
-                    io.to(viewerId).emit('host-streaming-started', {
-                      roomId: roomId,
-                      timestamp: Date.now()
-                    });
+              const room = rooms.get(roomId);
+              if (room && !room.isStreaming) {
+                room.isStreaming = true;
+                room.streamStartTime = Date.now();
+
+                // Notify ALL current viewers
+                room.viewers.forEach(viewerId => {
+                  io.to(viewerId).emit('host-streaming-started', {
+                    roomId: roomId,
+                    timestamp: room.streamStartTime
                   });
-                  console.log('[VIDEO-SERVER] 📡 Notified', room.viewers.size, 'viewers that host started streaming');
-                }
-                hasNotifiedViewers = true;
+                });
               }
               
               if (!frame) {
@@ -839,6 +849,9 @@ io.on('connection', socket => {
     for (const [roomId, room] of rooms.entries()) {
       if (room.host === socket.id) {
         // Host disconnected - notify viewers and cleanup audio redaction
+        room.isStreaming = false;
+        room.streamStartTime = null;
+
         socket.to(roomId).emit('host-disconnected');
         
         // Clean up audio redaction for this room
@@ -846,6 +859,17 @@ io.on('connection', socket => {
           audioRedactionProcessor.cleanup(roomId);
         } catch (error) {
           console.error('[SERVER] Error cleaning up audio redaction:', error);
+        }
+        
+        // Clean up video processing room data
+        try {
+          if (fetch) {
+            fetch(`${API_CONFIG.VIDEO_API_URL}/cleanup-room/${roomId}`, {
+              method: 'POST'
+            }).catch(err => console.error('[SERVER] Video cleanup failed:', err));
+          }
+        } catch (error) {
+          console.error('[SERVER] Error calling video cleanup:', error);
         }
         
         // Clean up audio timing tracking
