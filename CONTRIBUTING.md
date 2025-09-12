@@ -2,16 +2,16 @@
 
 Thank you for your interest in contributing to the Live Privacy Filter project! This document provides the necessary details for developers, including the project architecture, setup instructions, and testing procedures.
 
----
-
 ## ⚙️ Interfaces & Contracts
 
 All computer-vision models share a **common I/O contract**:
+
 - **Input:** `(frame_id: int, frame: np.ndarray[BGR])`
 - **Output:** `(frame_id: int, boxes: List[Tuple[x1,y1,x2,y2]])`
 - Coordinates are **pixel-space integers** in the original frame size.
 
 ### Video model interface
+
 ```python
 def infer(frame_id: int, frame_bgr: "np.ndarray") -> "tuple[int, list[tuple[int,int,int,int]]]":
     """
@@ -19,14 +19,11 @@ def infer(frame_id: int, frame_bgr: "np.ndarray") -> "tuple[int, list[tuple[int,
     """
 ```
 
-
----
-
 ## 🔧 Configuration (example `config.yaml`)
 
 ```yaml
 io:
-  source: 0                 # camera index or "path/to/video.mp4"
+  source: 0 # camera index or "path/to/video.mp4"
   out: outputs/blurred.mp4
   write_output: true
 
@@ -46,7 +43,7 @@ video:
       conf: 0.25
     pii_text:
       enabled: true
-      ocr: doctr              # or easyocr
+      ocr: doctr # or easyocr
       clf_path: models/pii_clf.joblib
       conf_gate: 0.35
 
@@ -56,24 +53,22 @@ video:
     iou_thresh: 0.3
 
   blur:
-    type: gaussian            # gaussian | mosaic
+    type: gaussian # gaussian | mosaic
     ksize: 41
     pad: 4
 
 audio:
-  whisper_model: small        # tiny | base | small | medium | large-v3
+  whisper_model: small # tiny | base | small | medium | large-v3
   chunk_seconds: 5
-  deberta_model: models/deberta-pii/   # local or HF path
+  deberta_model: models/deberta-pii/ # local or HF path
   mouth_blur_window_ms: 500
 ```
-
----
 
 ## 🚀 Development Setup
 
 ```bash
 # Clone repository
-git clone [https://github.com/Saximn/tiktok-techjam-2025.git](https://github.com/Saximn/tiktok-techjam-2025.git)
+git clone https://github.com/Saximn/tiktok-techjam-2025.git
 cd tiktok-techjam-2025
 
 # Create development environment
@@ -93,8 +88,6 @@ pre-commit install
 - **Python**: Black, isort, flake8
 - **Type Hints**: Required for all public APIs
 - **Documentation**: Google-style docstrings
-
----
 
 ## 🧪 Testing
 
@@ -117,11 +110,10 @@ python scripts/benchmark.py --config configs/balanced.yaml
 ```
 
 ### Evaluation Strategy
+
 - **Video**: Measure PII-F1 on a labeled set of frames (faces/plates/text).
 - **Audio**: Measure precision/recall of PII-tagged tokens per 5s window.
 - **Latency**: Measure FPS (median, p95) and time breakdown per component.
-
----
 
 ## 🗺️ Roadmap
 
@@ -129,8 +121,6 @@ python scripts/benchmark.py --config configs/balanced.yaml
 - [ ] ONNX export paths for mobile/embedded deployment
 - [ ] Virtual camera output for OBS/VT Cam
 - [ ] Per-user ignore lists and manual blur management UI
-
----
 
 ## 📞 Support & Community
 
