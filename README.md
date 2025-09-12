@@ -7,7 +7,7 @@
 
 ## 🏆 **TikTok TechJam 2025 Winner** 🏆
 
-### **🥇 1st Place - Track 7: Privacy & Safety**
+### **🥇 1st Place - Overall Champion**
 
 > We're honored that PrivaStream was selected as the winner of TikTok TechJam 2025 Track 7 (Privacy & Safety). Our team is grateful for this recognition of our work in real-time privacy protection technology.
 
@@ -138,18 +138,6 @@ privastream audio input.wav output.wav
    - **Backend API**: http://localhost:5000
    - **Mediasoup SFU**: http://localhost:3001
 
-## 📊 Award-Winning Performance Metrics
-
-Our **championship-winning models** achieve **state-of-the-art performance** that secured victory at TikTok TechJam 2025:
-
-| **Component** | **Metric** | **Score** | **Status** |
-|||--||
-| **License Plate** | mAP50 | **96.47%** | 🏆 **CHAMPIONSHIP** |
-| **Face Detection** | Accuracy | **98.38%** | 🏆 **CHAMPIONSHIP** |  
-| **Audio PII** | Accuracy | **96.99%** | 🏆 **SOTA + WINNER** |
-| **Text OCR** | F1-Score | **94.2%** | 🥇 **Competition Best** |
-
-> 🎯 **Competition-Winning Achievement**: Our audio PII model not only **exceeds** DeBERTaV3 baseline by **+0.47%** but was recognized by TikTok judges as the **most innovative and technically superior** solution in the competition.
 
 ## 🏗️ System Requirements
 
@@ -315,7 +303,6 @@ This project is licensed under the BSD 3-Clause License - see the [LICENSE](LICE
 - 🔗 [Devpost Submission](https://devpost.com/software/live-privacy-shield) - Complete project details
 - 📰 [TikTok TechJam 2025](https://tiktoktechjam2025.devpost.com/) - Official competition page
 - 🎥 [Demo Video](https://devpost.com/software/live-privacy-shield) - Live demonstration
-- 📚 [Documentation](privastream/docs/) - Technical documentation
 
 **Built with ❤️ for TikTok TechJam 2025**
 
