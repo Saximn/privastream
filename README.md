@@ -28,7 +28,8 @@ A **production-ready, real-time privacy filter** for Tiktok livestreams and acro
   - **Text PII blur** (OCR + ML classification)
 
 - 🎵 **Audio PII Detection**
-  - **Whisper** speech-to-text processing
+  - **Faster Whisper** speech-to-text processing
+  - **Silero VAD** to filter silence
   - **Fine-tuned DeBERTa** (96.99% accuracy - SOTA)
   - **Real-time mouth blur** sync with audio
 
