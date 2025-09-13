@@ -1,8 +1,6 @@
 # PrivaStream: AI-Powered Privacy Streaming Platform
 
-![Python](https://img.shields.io/badge/python-v3.8+-blue.svg)
 ![License](https://img.shields.io/badge/license-BSD%203--Clause-green.svg)
-![Docker](https://img.shields.io/badge/docker-supported-blue.svg)
 ![Winner](https://img.shields.io/badge/TikTok%20TechJam%202025-🏆%20CHAMPION-gold.svg)
 
 ## 🏆 **TikTok TechJam 2025 Winner** 🏆
