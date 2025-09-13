@@ -7,7 +7,7 @@
 
 ### **🥇 1st Place - Overall Champion**
 
-> We're honored that PrivaStream was selected as the winner of TikTok TechJam 2025 Track 7 (Privacy & Safety). Our team is grateful for this recognition of our work in real-time privacy protection technology.
+> We're honored that PrivaStream was selected as the winner of TikTok TechJam 2025. Our team is grateful for this recognition of our work in real-time privacy protection technology.
 
 **🔗 [View on Devpost](https://devpost.com/software/live-privacy-shield)**
 
