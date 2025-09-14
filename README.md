@@ -1,6 +1,6 @@
 # PrivaStream: AI-Powered Privacy Streaming Platform
 
-![License](https://img.shields.io/badge/license-BSD%203--Clause-green.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Winner](https://img.shields.io/badge/TikTok%20TechJam%202025-🏆%20CHAMPION-gold.svg)
 
 ## 🏆 **TikTok TechJam 2025 Winner** 🏆
@@ -285,9 +285,36 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guid
 - [Roboflow Singapore License Plates](https://universe.roboflow.com/car-plate-fcnrs/sg-license-plate-yqedo) - License plate detection
 - [ICDAR Scene Text](http://rrc.cvc.uab.es/) - Text recognition datasets
 
+## 🤝 Contributing
+
+We welcome contributions to PrivaStream! Whether you're fixing bugs, adding features, improving documentation, or sharing feedback, your help makes this project better.
+
+### Quick Start for Contributors
+
+1. **Fork** the repository
+2. **Clone** your fork locally
+3. **Create** a new branch for your changes
+4. **Make** your changes and test them
+5. **Submit** a pull request
+
+### Ways to Contribute
+
+- 🐛 **Report bugs** - Found an issue? Let us know!
+- 💡 **Suggest features** - Have an idea? We'd love to hear it!
+- 🔧 **Fix issues** - Check our [issues](https://github.com/your-username/tiktok-techjam-2025/issues) for ways to help
+- 📚 **Improve docs** - Help make our documentation better
+- 🧪 **Add tests** - Help us improve code coverage
+- ⚡ **Optimize performance** - Make PrivaStream faster and more efficient
+
+### Community Guidelines
+
+Please read our [Code of Conduct](CODE_OF_CONDUCT.md) and [Contributing Guidelines](CONTRIBUTING.md) before contributing.
+
+For security-related issues, please see our [Security Policy](SECURITY.md).
+
 ## 📄 License
 
-This project is licensed under the BSD 3-Clause License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## 🏆 Competition Recognition
 
