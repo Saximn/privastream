@@ -1,6 +1,6 @@
 # PrivaStream: AI-Powered Privacy Streaming Platform
 
-![License](https://img.shields.io/badge/license-MIT-green.svg)
+![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
 ![Winner](https://img.shields.io/badge/TikTok%20TechJam%202025-🏆%20CHAMPION-gold.svg)
 
 ## 🏆 **TikTok TechJam 2025 Winner** 🏆
@@ -314,7 +314,7 @@ For security-related issues, please see our [Security Policy](SECURITY.md).
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
 
 ## 🏆 Competition Recognition
 
