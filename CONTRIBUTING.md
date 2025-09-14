@@ -68,8 +68,8 @@ audio:
 
 ```bash
 # Clone repository
-git clone https://github.com/Saximn/tiktok-techjam-2025.git
-cd tiktok-techjam-2025
+git clone https://github.com/Saximn/privastream.git
+cd privastream
 
 # Create development environment
 python -m venv venv
@@ -126,4 +126,4 @@ python scripts/benchmark.py --config configs/balanced.yaml
 
 - **GitHub Issues**: [Report bugs and request features](https://github.com/Saximn/tiktok-techjam-2025/issues)
 - **Discussions**: [Community discussions and Q&A](https://github.com/Saximn/tiktok-techjam-2025/discussions)
-- **Email**: Contact the development team for other inquiries.
+- **Email**: privastream.opensource@gmail.com for other inquiries.

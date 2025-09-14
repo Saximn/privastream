@@ -17,7 +17,7 @@ We take the security of PrivaStream seriously. If you believe you have found a s
 
 **Please do NOT report security vulnerabilities through public GitHub issues.**
 
-Instead, please send an email to security@privastream.ai with the following information:
+Instead, please send an email to privastream.opensource@gmail.com with the following information:
 
 - A description of the vulnerability
 - Steps to reproduce the issue

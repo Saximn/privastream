@@ -5,12 +5,14 @@
 ### Prerequisites
 
 #### System Requirements
+
 - **Python**: 3.8+ (3.10+ recommended for development)
 - **Node.js**: 18+ for frontend development
 - **Git**: Latest version
 - **GPU**: NVIDIA GPU with CUDA 12.1+ (optional but recommended)
 
 #### Development Tools
+
 ```bash
 # Install essential tools
 pip install pre-commit black flake8 mypy pytest
@@ -27,7 +29,7 @@ npm install -g prettier eslint
 ```bash
 # Clone repository
 git clone https://github.com/privastream/tiktok-techjam-2025.git
-cd tiktok-techjam-2025
+cd privastream
 
 # Create virtual environment
 python -m venv venv
@@ -48,39 +50,43 @@ cd src/web/mediasoup && npm install && cd -
 ### IDE Configuration
 
 #### VS Code Settings
+
 Create `.vscode/settings.json`:
+
 ```json
 {
-    "python.defaultInterpreterPath": "./venv/bin/python",
-    "python.linting.enabled": true,
-    "python.linting.pylintEnabled": false,
-    "python.linting.flake8Enabled": true,
-    "python.formatting.provider": "black",
-    "python.sortImports.args": ["--profile", "black"],
-    "editor.formatOnSave": true,
-    "editor.codeActionsOnSave": {
-        "source.organizeImports": true
-    }
+  "python.defaultInterpreterPath": "./venv/bin/python",
+  "python.linting.enabled": true,
+  "python.linting.pylintEnabled": false,
+  "python.linting.flake8Enabled": true,
+  "python.formatting.provider": "black",
+  "python.sortImports.args": ["--profile", "black"],
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.organizeImports": true
+  }
 }
 ```
 
 #### VS Code Extensions
+
 ```json
 {
-    "recommendations": [
-        "ms-python.python",
-        "ms-python.flake8",
-        "ms-python.black-formatter",
-        "ms-vscode.vscode-typescript-next",
-        "bradlc.vscode-tailwindcss",
-        "esbenp.prettier-vscode"
-    ]
+  "recommendations": [
+    "ms-python.python",
+    "ms-python.flake8",
+    "ms-python.black-formatter",
+    "ms-vscode.vscode-typescript-next",
+    "bradlc.vscode-tailwindcss",
+    "esbenp.prettier-vscode"
+  ]
 }
 ```
 
 ## Project Structure
 
 ### Overview
+
 ```
 tiktok-techjam-2025/
 ├── src/                           # Source code
@@ -113,16 +119,19 @@ tiktok-techjam-2025/
 ### Key Modules
 
 #### Models Module (`src/models/`)
+
 - **detection/**: Computer vision models for video processing
 - **audio/**: Speech processing and PII detection
 - **utils/**: Shared utilities for model operations
 
 #### Web Module (`src/web/`)
+
 - **backend/**: Flask application with SocketIO
 - **frontend/**: React application with Next.js
 - **mediasoup/**: Node.js WebRTC SFU server
 
 #### Core Module (`src/core/`)
+
 - **config/**: Configuration management system
 - **exceptions.py**: Custom exception classes
 - **logging.py**: Centralized logging configuration
@@ -132,14 +141,17 @@ tiktok-techjam-2025/
 ### Feature Development
 
 #### 1. Create Feature Branch
+
 ```bash
 git checkout -b feature/your-feature-name
 ```
 
 #### 2. Make Changes
+
 Follow the coding standards and write tests for new functionality.
 
 #### 3. Run Tests
+
 ```bash
 # Python tests
 pytest src/tests/
@@ -152,6 +164,7 @@ python src/models/detection/unified_bbox_test.py
 ```
 
 #### 4. Code Quality Checks
+
 ```bash
 # Run pre-commit hooks
 pre-commit run --all-files
@@ -163,12 +176,14 @@ mypy src/
 ```
 
 #### 5. Commit Changes
+
 ```bash
 git add .
 git commit -m "feat: add your feature description"
 ```
 
 #### 6. Push and Create PR
+
 ```bash
 git push origin feature/your-feature-name
 # Create pull request on GitHub
@@ -177,6 +192,7 @@ git push origin feature/your-feature-name
 ### Code Style Guidelines
 
 #### Python Code Style
+
 We follow PEP 8 with Black formatting:
 
 ```python
@@ -242,11 +258,12 @@ class FaceDetector:
 ```
 
 #### JavaScript/TypeScript Code Style
+
 We use Prettier and ESLint:
 
 ```javascript
-import React, { useState, useEffect, useCallback } from 'react';
-import { io, Socket } from 'socket.io-client';
+import React, { useState, useEffect, useCallback } from "react";
+import { io, Socket } from "socket.io-client";
 
 interface StreamConfig {
   faceBlur: boolean;
@@ -256,25 +273,28 @@ interface StreamConfig {
 }
 
 const StreamingComponent: React.FC = () => {
-  const [socket, setSocket] = useState<Socket | null>(null);
-  const [roomId, setRoomId] = useState<string>('');
-  const [config, setConfig] = useState<StreamConfig>({
-    faceBlur: true,
-    plateBlur: true,
-    textBlur: true,
-    audioProcessing: true,
-  });
+  const [socket, setSocket] = (useState < Socket) | (null > null);
+  const [roomId, setRoomId] = useState < string > "";
+  const [config, setConfig] =
+    useState <
+    StreamConfig >
+    {
+      faceBlur: true,
+      plateBlur: true,
+      textBlur: true,
+      audioProcessing: true,
+    };
 
   const handleCreateRoom = useCallback(() => {
     if (socket) {
-      socket.emit('create_room');
+      socket.emit("create_room");
     }
   }, [socket]);
 
   useEffect(() => {
-    const newSocket = io('http://localhost:5000');
+    const newSocket = io("http://localhost:5000");
 
-    newSocket.on('room_created', (data) => {
+    newSocket.on("room_created", (data) => {
       setRoomId(data.roomId);
     });
 
@@ -287,14 +307,8 @@ const StreamingComponent: React.FC = () => {
 
   return (
     <div className="streaming-container">
-      <button onClick={handleCreateRoom}>
-        Create Room
-      </button>
-      {roomId && (
-        <div className="room-info">
-          Room ID: {roomId}
-        </div>
-      )}
+      <button onClick={handleCreateRoom}>Create Room</button>
+      {roomId && <div className="room-info">Room ID: {roomId}</div>}
     </div>
   );
 };
@@ -305,6 +319,7 @@ export default StreamingComponent;
 ## Testing Strategy
 
 ### Test Structure
+
 ```
 src/tests/
 ├── unit/                  # Unit tests
@@ -325,6 +340,7 @@ src/tests/
 ### Running Tests
 
 #### Unit Tests
+
 ```bash
 # Run all tests
 pytest
@@ -340,6 +356,7 @@ pytest -n auto
 ```
 
 #### Integration Tests
+
 ```bash
 # Run integration tests
 pytest src/tests/integration/
@@ -349,6 +366,7 @@ pytest src/tests/integration/ --use-real-models
 ```
 
 #### Model-Specific Tests
+
 ```bash
 # Test face detection
 python src/models/detection/face_blur/test_face_detector.py
@@ -363,6 +381,7 @@ python src/models/audio/training/test_setup.py
 ### Writing Tests
 
 #### Test Example
+
 ```python
 import pytest
 import numpy as np
@@ -439,6 +458,7 @@ class TestFaceDetector:
 ### Debug Configuration
 
 #### Python Debugging
+
 ```python
 import logging
 import pdb
@@ -454,37 +474,40 @@ breakpoint()
 ```
 
 #### VS Code Launch Configuration
+
 Create `.vscode/launch.json`:
+
 ```json
 {
-    "version": "0.2.0",
-    "configurations": [
-        {
-            "name": "Python: Flask App",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/src/web/backend/app.py",
-            "console": "integratedTerminal",
-            "env": {
-                "FLASK_ENV": "development",
-                "FLASK_DEBUG": "1"
-            }
-        },
-        {
-            "name": "Python: Process Video",
-            "type": "python",
-            "request": "launch",
-            "module": "privastream.cli.main",
-            "args": ["video", "test_input.mp4", "test_output.mp4", "--debug"],
-            "console": "integratedTerminal"
-        }
-    ]
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Python: Flask App",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/web/backend/app.py",
+      "console": "integratedTerminal",
+      "env": {
+        "FLASK_ENV": "development",
+        "FLASK_DEBUG": "1"
+      }
+    },
+    {
+      "name": "Python: Process Video",
+      "type": "python",
+      "request": "launch",
+      "module": "privastream.cli.main",
+      "args": ["video", "test_input.mp4", "test_output.mp4", "--debug"],
+      "console": "integratedTerminal"
+    }
+  ]
 }
 ```
 
 ### Performance Profiling
 
 #### Python Profiling
+
 ```python
 import cProfile
 import pstats
@@ -504,6 +527,7 @@ s.print_stats()
 ```
 
 #### Memory Profiling
+
 ```bash
 # Install memory profiler
 pip install memory-profiler
@@ -513,6 +537,7 @@ python -m memory_profiler your_script.py
 ```
 
 #### GPU Profiling
+
 ```python
 import torch.profiler
 
@@ -532,6 +557,7 @@ print(prof.key_averages().table(sort_by="cuda_time_total"))
 ### Adding New Models
 
 #### 1. Create Model Module
+
 ```python
 # src/models/detection/your_model/your_detector.py
 from typing import List, Tuple
@@ -558,6 +584,7 @@ class YourDetector:
 ```
 
 #### 2. Add Tests
+
 ```python
 # src/models/detection/your_model/test_your_detector.py
 import pytest
@@ -569,6 +596,7 @@ def test_your_detector():
 ```
 
 #### 3. Integrate with Pipeline
+
 ```python
 # src/models/detection/unified_detector.py
 from .your_model.your_detector import YourDetector
@@ -585,6 +613,7 @@ class UnifiedDetector:
 ### Model Training
 
 #### Setup Training Environment
+
 ```bash
 # Create training environment
 python -m venv training-env
@@ -598,6 +627,7 @@ wandb login
 ```
 
 #### Training Script Template
+
 ```python
 import torch
 import torch.nn as nn
@@ -655,6 +685,7 @@ if __name__ == "__main__":
 ### GitHub Actions
 
 #### Test Workflow
+
 ```yaml
 # .github/workflows/test.yml
 name: Tests
@@ -669,37 +700,38 @@ jobs:
         python-version: [3.8, 3.9, "3.10", "3.11"]
 
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ matrix.python-version }}
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -e .[dev]
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
 
-    - name: Lint with flake8
-      run: |
-        flake8 src/
+      - name: Lint with flake8
+        run: |
+          flake8 src/
 
-    - name: Type check with mypy
-      run: |
-        mypy src/
+      - name: Type check with mypy
+        run: |
+          mypy src/
 
-    - name: Test with pytest
-      run: |
-        pytest --cov=src --cov-report=xml
+      - name: Test with pytest
+        run: |
+          pytest --cov=src --cov-report=xml
 
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
 ```
 
 ### Pre-commit Configuration
 
 #### .pre-commit-config.yaml
+
 ```yaml
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -738,6 +770,7 @@ repos:
 ### Writing Documentation
 
 #### Docstring Standards
+
 Follow Google-style docstrings:
 
 ```python
@@ -769,6 +802,7 @@ def process_video(
 ```
 
 #### API Documentation
+
 Use type hints and docstrings that can be processed by Sphinx:
 
 ```python
@@ -831,12 +865,14 @@ sphinx-build -b html . _build/html
 ## Getting Help
 
 ### Resources
+
 - **Documentation**: Check existing docs first
 - **Issues**: Search GitHub issues for similar problems
 - **Discussions**: Use GitHub Discussions for questions
 - **Code Examples**: Check test files for usage examples
 
 ### Contact
+
 - **General Questions**: GitHub Discussions
 - **Bug Reports**: GitHub Issues
 - **Security Issues**: security@privastream.ai

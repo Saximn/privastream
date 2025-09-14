@@ -14,6 +14,7 @@ PrivaStream can be deployed in various configurations depending on your requirem
 ### Single Machine Deployment
 
 #### Prerequisites
+
 ```bash
 # Install Docker and Docker Compose
 curl -fsSL https://get.docker.com -o get-docker.sh
@@ -25,10 +26,11 @@ sudo chmod +x /usr/local/bin/docker-compose
 ```
 
 #### Quick Deploy
+
 ```bash
 # Clone repository
 git clone https://github.com/privastream/tiktok-techjam-2025.git
-cd tiktok-techjam-2025
+cd privastream
 
 # Configure environment
 cp .env.example .env
@@ -39,7 +41,9 @@ docker-compose up -d
 ```
 
 #### Services Overview
+
 The deployment includes:
+
 - **Frontend**: React app on port 3000
 - **Backend**: Flask API on port 5000
 - **Mediasoup**: WebRTC SFU on port 3001
@@ -49,8 +53,9 @@ The deployment includes:
 ### Production Deployment
 
 #### docker-compose.prod.yml
+
 ```yaml
-version: '3.8'
+version: "3.8"
 services:
   nginx:
     image: nginx:alpine
@@ -107,6 +112,7 @@ volumes:
 ```
 
 #### Deploy to Production
+
 ```bash
 # Deploy with production config
 docker-compose -f docker-compose.prod.yml up -d
@@ -118,6 +124,7 @@ docker-compose logs -f
 ## Kubernetes Deployment
 
 ### Prerequisites
+
 ```bash
 # Install kubectl
 curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
@@ -131,6 +138,7 @@ curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 ### Kubernetes Manifests
 
 #### Namespace
+
 ```yaml
 # k8s/namespace.yaml
 apiVersion: v1
@@ -140,6 +148,7 @@ metadata:
 ```
 
 #### Backend Deployment
+
 ```yaml
 # k8s/backend-deployment.yaml
 apiVersion: apps/v1
@@ -158,25 +167,26 @@ spec:
         app: privastream-backend
     spec:
       containers:
-      - name: backend
-        image: privastream/backend:latest
-        ports:
-        - containerPort: 5000
-        env:
-        - name: FLASK_ENV
-          value: "production"
-        resources:
-          requests:
-            nvidia.com/gpu: 1
-            memory: "4Gi"
-            cpu: "1"
-          limits:
-            nvidia.com/gpu: 1
-            memory: "8Gi"
-            cpu: "2"
+        - name: backend
+          image: privastream/backend:latest
+          ports:
+            - containerPort: 5000
+          env:
+            - name: FLASK_ENV
+              value: "production"
+          resources:
+            requests:
+              nvidia.com/gpu: 1
+              memory: "4Gi"
+              cpu: "1"
+            limits:
+              nvidia.com/gpu: 1
+              memory: "8Gi"
+              cpu: "2"
 ```
 
 #### Service
+
 ```yaml
 # k8s/backend-service.yaml
 apiVersion: v1
@@ -188,12 +198,13 @@ spec:
   selector:
     app: privastream-backend
   ports:
-  - port: 5000
-    targetPort: 5000
+    - port: 5000
+      targetPort: 5000
   type: LoadBalancer
 ```
 
 #### Deploy to Kubernetes
+
 ```bash
 # Apply manifests
 kubectl apply -f k8s/
@@ -208,6 +219,7 @@ kubectl get services -n privastream
 ### AWS Deployment
 
 #### Using ECS with Fargate
+
 ```yaml
 # aws/ecs-task-definition.json
 {
@@ -216,28 +228,20 @@ kubectl get services -n privastream
   "requiresCompatibilities": ["FARGATE"],
   "cpu": "2048",
   "memory": "4096",
-  "containerDefinitions": [
-    {
-      "name": "privastream-backend",
-      "image": "privastream/backend:latest",
-      "portMappings": [
-        {
-          "containerPort": 5000,
-          "protocol": "tcp"
-        }
-      ],
-      "environment": [
-        {
-          "name": "FLASK_ENV",
-          "value": "production"
-        }
-      ]
-    }
-  ]
+  "containerDefinitions":
+    [
+      {
+        "name": "privastream-backend",
+        "image": "privastream/backend:latest",
+        "portMappings": [{ "containerPort": 5000, "protocol": "tcp" }],
+        "environment": [{ "name": "FLASK_ENV", "value": "production" }],
+      },
+    ],
 }
 ```
 
 #### Deploy with AWS CLI
+
 ```bash
 # Create ECS cluster
 aws ecs create-cluster --cluster-name privastream-cluster
@@ -257,6 +261,7 @@ aws ecs create-service \
 ### Google Cloud Platform
 
 #### Using Cloud Run
+
 ```bash
 # Build and push image
 gcloud builds submit --tag gcr.io/PROJECT_ID/privastream-backend
@@ -290,6 +295,7 @@ az container create \
 ### Environment Variables
 
 #### Production Environment
+
 ```bash
 # .env.production
 FLASK_ENV=production
@@ -385,6 +391,7 @@ server {
 ## SSL/TLS Configuration
 
 ### Let's Encrypt with Certbot
+
 ```bash
 # Install certbot
 sudo apt install certbot python3-certbot-nginx
@@ -399,9 +406,10 @@ echo "0 12 * * * /usr/bin/certbot renew --quiet" | sudo crontab -
 ## Monitoring and Logging
 
 ### Prometheus Metrics
+
 ```yaml
 # docker-compose.monitoring.yml
-version: '3.8'
+version: "3.8"
 services:
   prometheus:
     image: prom/prometheus
@@ -424,9 +432,10 @@ volumes:
 ```
 
 ### Log Aggregation with ELK Stack
+
 ```yaml
 # docker-compose.logging.yml
-version: '3.8'
+version: "3.8"
 services:
   elasticsearch:
     image: elasticsearch:7.17.0
@@ -451,6 +460,7 @@ services:
 ## Performance Optimization
 
 ### GPU Optimization
+
 ```bash
 # GPU memory management
 export CUDA_DEVICE_ORDER="PCI_BUS_ID"
@@ -459,6 +469,7 @@ export PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:256"
 ```
 
 ### Load Balancing
+
 ```nginx
 # nginx load balancer
 upstream backend_pool {
@@ -470,6 +481,7 @@ upstream backend_pool {
 ```
 
 ### Caching
+
 ```python
 # Redis caching configuration
 CACHE_TYPE = "RedisCache"
@@ -480,6 +492,7 @@ CACHE_DEFAULT_TIMEOUT = 300
 ## Security
 
 ### Firewall Configuration
+
 ```bash
 # UFW rules
 sudo ufw allow 22/tcp      # SSH
@@ -489,6 +502,7 @@ sudo ufw enable
 ```
 
 ### Container Security
+
 ```dockerfile
 # Security-focused Dockerfile
 FROM python:3.10-slim
@@ -507,6 +521,7 @@ USER privastream
 ## Backup and Recovery
 
 ### Database Backup
+
 ```bash
 # PostgreSQL backup
 pg_dump -h localhost -U user privastream > backup.sql
@@ -516,6 +531,7 @@ psql -h localhost -U user -d privastream < backup.sql
 ```
 
 ### Model Backup
+
 ```bash
 # Backup models
 tar -czf models-backup.tar.gz models/
@@ -527,12 +543,14 @@ tar -xzf models-backup.tar.gz
 ## Health Checks
 
 ### Docker Health Check
+
 ```dockerfile
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:5000/health || exit 1
 ```
 
 ### Kubernetes Health Check
+
 ```yaml
 livenessProbe:
   httpGet:
@@ -554,6 +572,7 @@ readinessProbe:
 ### Common Issues
 
 #### Out of Memory
+
 ```bash
 # Check memory usage
 docker stats
@@ -563,6 +582,7 @@ export BATCH_SIZE=1
 ```
 
 #### GPU Issues
+
 ```bash
 # Check GPU availability
 nvidia-smi
@@ -572,6 +592,7 @@ docker run --gpus all nvidia/cuda:11.8-base-ubuntu20.04 nvidia-smi
 ```
 
 #### Port Conflicts
+
 ```bash
 # Check port usage
 netstat -tulpn | grep :5000
@@ -584,6 +605,7 @@ ports:
 ## Support
 
 For deployment issues:
+
 - **Documentation**: Check deployment guides
 - **Issues**: [GitHub Issues](https://github.com/privastream/tiktok-techjam-2025/issues)
 - **Enterprise Support**: Contact support@privastream.ai

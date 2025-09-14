@@ -3,12 +3,14 @@
 ## System Requirements
 
 ### Minimum Requirements
+
 - **Python**: 3.8+ (Python 3.10+ recommended)
 - **RAM**: 16GB (32GB recommended for audio processing)
 - **Storage**: 10GB+ free space for models and dependencies
 - **OS**: Windows 10+, Ubuntu 18.04+, macOS 10.15+
 
 ### Recommended for Production
+
 - **GPU**: NVIDIA GPU with CUDA 12.1+ support
 - **RAM**: 32GB+
 - **CPU**: Multi-core processor (Intel i9/AMD Ryzen 7+)
@@ -20,6 +22,7 @@
 ### Method 1: Package Installation (Recommended)
 
 #### Basic Installation
+
 ```bash
 # Clone the repository
 git clone https://github.com/Saximn/privastream.git
@@ -30,12 +33,14 @@ pip install -e .
 ```
 
 #### Full Installation with GPU Support
+
 ```bash
 # Install with all features
 pip install -e .[gpu,audio,dev]
 ```
 
 #### Verify Installation
+
 ```bash
 privastream --version
 privastream --help
@@ -44,11 +49,13 @@ privastream --help
 ### Method 2: Docker Installation
 
 #### Prerequisites
+
 - Docker 20.10+
 - Docker Compose 1.29+
 - NVIDIA Docker (for GPU support)
 
 #### Quick Start
+
 ```bash
 # Clone repository
 git clone https://github.com/Saximn/privastream.git
@@ -61,6 +68,7 @@ docker-compose up -d
 ```
 
 #### With GPU Support
+
 ```bash
 # Use GPU-enabled compose file
 docker-compose -f docker-compose.gpu.yml up -d
@@ -69,6 +77,7 @@ docker-compose -f docker-compose.gpu.yml up -d
 ### Method 3: Development Setup
 
 #### Create Virtual Environment
+
 ```bash
 # Create virtual environment
 python -m venv privastream-env
@@ -81,6 +90,7 @@ privastream-env\Scripts\activate
 ```
 
 #### Install Dependencies
+
 ```bash
 # Upgrade pip
 pip install --upgrade pip
@@ -100,6 +110,7 @@ pre-commit install
 ### Windows
 
 #### Prerequisites
+
 ```powershell
 # Install Python 3.10+
 winget install Python.Python.3.10
@@ -112,6 +123,7 @@ winget install Microsoft.VisualStudio.2022.BuildTools
 ```
 
 #### CUDA Setup
+
 1. Download and install [CUDA Toolkit 12.1+](https://developer.nvidia.com/cuda-downloads)
 2. Add CUDA to PATH:
    ```powershell
@@ -119,16 +131,18 @@ winget install Microsoft.VisualStudio.2022.BuildTools
    ```
 
 #### Installation
+
 ```powershell
 # Clone and install
 git clone https://github.com/privastream/tiktok-techjam-2025.git
-cd tiktok-techjam-2025
+cd privastream
 pip install -e .[gpu,audio]
 ```
 
 ### Ubuntu/Debian
 
 #### Prerequisites
+
 ```bash
 # Update system
 sudo apt update && sudo apt upgrade -y
@@ -140,6 +154,7 @@ sudo apt install git curl
 ```
 
 #### CUDA Setup
+
 ```bash
 # Add NVIDIA package repositories
 wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-ubuntu2004.pin
@@ -150,10 +165,11 @@ sudo apt install cuda-toolkit-12-1
 ```
 
 #### Installation
+
 ```bash
 # Clone and install
 git clone https://github.com/privastream/tiktok-techjam-2025.git
-cd tiktok-techjam-2025
+cd privastream
 
 # Create virtual environment
 python3.10 -m venv privastream-env
@@ -166,6 +182,7 @@ pip install -e .[gpu,audio]
 ### macOS
 
 #### Prerequisites
+
 ```bash
 # Install Homebrew
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
@@ -175,10 +192,11 @@ brew install python@3.10 git cmake
 ```
 
 #### Installation
+
 ```bash
 # Clone and install
 git clone https://github.com/privastream/tiktok-techjam-2025.git
-cd tiktok-techjam-2025
+cd privastream
 
 # Create virtual environment
 python3.10 -m venv privastream-env
@@ -191,6 +209,7 @@ pip install -e .[audio,dev]
 ## Model Setup
 
 ### Automatic Model Download
+
 Models are automatically downloaded on first run. The following models will be downloaded:
 
 - **Face Detection**: `face_best.pt` (~50MB)
@@ -199,6 +218,7 @@ Models are automatically downloaded on first run. The following models will be d
 - **Whisper Models**: Downloaded as needed (varies by size)
 
 ### Manual Model Setup
+
 ```bash
 # Create models directory
 mkdir -p ~/.privastream/models
@@ -212,7 +232,9 @@ wget -O ~/.privastream/models/pii_clf.joblib [MODEL_URL]
 ## Configuration
 
 ### Environment Variables
+
 Create a `.env` file:
+
 ```bash
 # Core settings
 PRIVASTREAM_LOG_LEVEL=INFO
@@ -228,7 +250,9 @@ FLASK_DEBUG=False
 ```
 
 ### Configuration File
+
 Create `~/.privastream/config.yaml`:
+
 ```yaml
 video:
   models:
@@ -251,6 +275,7 @@ audio:
 ## Verification
 
 ### Test Installation
+
 ```bash
 # Check version
 privastream --version
@@ -263,6 +288,7 @@ privastream video test_input.mp4 test_output.mp4
 ```
 
 ### Performance Test
+
 ```bash
 # Run benchmark
 python -m privastream.tools.benchmark --duration 60
@@ -276,6 +302,7 @@ python -c "import torch; print('GPU available:', torch.cuda.is_available())"
 ### Common Issues
 
 #### CUDA Out of Memory
+
 ```bash
 # Solution 1: Reduce batch size
 export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:256
@@ -285,6 +312,7 @@ privastream video input.mp4 output.mp4 --model-size small
 ```
 
 #### Import Errors
+
 ```bash
 # Reinstall in development mode
 pip install -e .
@@ -295,6 +323,7 @@ find . -name "__pycache__" -type d -exec rm -rf {} +
 ```
 
 #### Audio Processing Issues
+
 ```bash
 # Install additional audio dependencies
 pip install librosa soundfile
@@ -304,6 +333,7 @@ sudo apt install ffmpeg libsndfile1
 ```
 
 #### Port Conflicts
+
 ```bash
 # Check what's using port 5000
 netstat -tulpn | grep 5000
@@ -322,6 +352,7 @@ privastream web --port 5001
 ### Performance Optimization
 
 #### GPU Optimization
+
 ```bash
 # Set optimal GPU memory fraction
 export CUDA_DEVICE_ORDER="PCI_BUS_ID"
@@ -329,6 +360,7 @@ export CUDA_VISIBLE_DEVICES="0"
 ```
 
 #### CPU Optimization
+
 ```bash
 # Set thread limits
 export OMP_NUM_THREADS=4
