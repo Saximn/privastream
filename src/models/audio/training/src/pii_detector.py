@@ -24,6 +24,20 @@ from .pipeline_types import (
 from .model_multi_dropouts import CustomModel
 
 
+DEFAULT_PII_KEYWORDS = (
+    "password",
+    "passcode",
+    "pin",
+    "secret",
+    "api key",
+    "access token",
+    "auth token",
+    "private key",
+    "security question",
+    "mother's maiden name"
+)
+
+
 class PIIDetector:
     """
     PII Detection processor using trained DeBERTa models for real-time text analysis.
@@ -36,7 +50,10 @@ class PIIDetector:
         device: str = "cuda",
         confidence_threshold: float = 0.7,
         max_length: int = 512,
-        stride: int = 128
+        stride: int = 128,
+        enable_deterministic_detection: bool = True,
+        deterministic_confidence: float = 0.98,
+        pii_keywords: Optional[List[str]] = None
     ):
         """
         Initialize the PII detector.
@@ -48,6 +65,9 @@ class PIIDetector:
             confidence_threshold: Minimum confidence for PII detection
             max_length: Maximum sequence length for tokenization
             stride: Stride for sliding window on long texts
+            enable_deterministic_detection: Whether to merge regex/checksum-based PII detections
+            deterministic_confidence: Confidence assigned to deterministic recognizer matches
+            pii_keywords: Keyword phrases to detect as sensitive PII context
         """
         self.model_path = model_path
         self.tokenizer_name = tokenizer_name
@@ -55,6 +75,9 @@ class PIIDetector:
         self.confidence_threshold = confidence_threshold
         self.max_length = max_length
         self.stride = stride
+        self.enable_deterministic_detection = enable_deterministic_detection
+        self.deterministic_confidence = deterministic_confidence
+        self.pii_keywords = pii_keywords or list(DEFAULT_PII_KEYWORDS)
         
         # Set up logging
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -221,11 +244,18 @@ class PIIDetector:
             List of PIIDetection objects
         """
         start_time = time.time()
+        deterministic_detections = []
         
         try:
             if not text.strip():
                 return []
             
+            deterministic_detections = (
+                self._detect_deterministic_pii(text, transcription_start_time)
+                if self.enable_deterministic_detection
+                else []
+            )
+
             # Tokenize text
             tokens = self.tokenize_text(text)
             
@@ -247,9 +277,13 @@ class PIIDetector:
                 transcription_start_time=transcription_start_time
             )
             
-            # Filter by confidence threshold
+            # Merge deterministic recognizers with model detections, then filter by confidence threshold
+            merged_detections = self._merge_detections(
+                detections,
+                deterministic_detections
+            )
             filtered_detections = [
-                detection for detection in detections
+                detection for detection in merged_detections
                 if detection.confidence >= self.confidence_threshold
             ]
             
@@ -272,7 +306,179 @@ class PIIDetector:
         except Exception as e:
             self.stats['errors'] += 1
             self.logger.error(f"Error detecting PII: {e}")
-            return []
+            return [
+                detection for detection in deterministic_detections
+                if detection.confidence >= self.confidence_threshold
+            ]
+
+    def _detect_deterministic_pii(
+        self,
+        text: str,
+        transcription_start_time: float
+    ) -> List[PIIDetection]:
+        """Detect high-precision deterministic PII patterns."""
+        detections = []
+
+        pattern_specs = [
+            (PIIType.EMAIL, re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b')),
+            (PIIType.PHONE_NUM, re.compile(r'(?<!\w)(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}(?!\w)')),
+            (PIIType.OTHER, re.compile(r'\b(?:https?://|www\.)[^\s<>"\']+\b', re.IGNORECASE)),
+            (PIIType.OTHER, re.compile(r'\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b')),
+            (PIIType.ID_NUM, re.compile(r'\b\d{3}-\d{2}-\d{4}\b')),
+            (PIIType.OTHER, re.compile(r'\b(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{1,2}-\d{1,2})\b')),
+        ]
+
+        for pii_type, pattern in pattern_specs:
+            for match in pattern.finditer(text):
+                detections.append(self._create_deterministic_detection(
+                    pii_type,
+                    match.group(0),
+                    match.start(),
+                    match.end(),
+                    text,
+                    transcription_start_time
+                ))
+
+        for match in re.finditer(r'(?<!\d)(?:\d[ -]?){13,19}(?!\d)', text):
+            candidate = match.group(0).strip()
+            digits = re.sub(r'\D', '', candidate)
+            if self._passes_luhn(digits):
+                detections.append(self._create_deterministic_detection(
+                    PIIType.ID_NUM,
+                    candidate,
+                    match.start(),
+                    match.end(),
+                    text,
+                    transcription_start_time
+                ))
+
+        keyword_pattern = self._compile_keyword_pattern()
+        if keyword_pattern:
+            for match in keyword_pattern.finditer(text):
+                detections.append(self._create_deterministic_detection(
+                    PIIType.OTHER,
+                    match.group(0),
+                    match.start(),
+                    match.end(),
+                    text,
+                    transcription_start_time
+                ))
+
+        return self._merge_detections([], detections)
+
+    def _compile_keyword_pattern(self) -> Optional[re.Pattern]:
+        """Compile configured sensitive keyword phrases."""
+        keywords = [keyword.strip() for keyword in self.pii_keywords if keyword.strip()]
+        if not keywords:
+            return None
+
+        keyword_alternation = "|".join(re.escape(keyword) for keyword in keywords)
+        return re.compile(
+            rf'\b(?:{keyword_alternation})\b(?:\s*(?:is|:|=)\s*\S+)?',
+            re.IGNORECASE
+        )
+
+    def _passes_luhn(self, digits: str) -> bool:
+        """Validate a digit string with the Luhn checksum."""
+        if not 13 <= len(digits) <= 19 or len(set(digits)) == 1:
+            return False
+
+        total = 0
+        reverse_digits = digits[::-1]
+        for idx, digit in enumerate(reverse_digits):
+            value = int(digit)
+            if idx % 2 == 1:
+                value *= 2
+                if value > 9:
+                    value -= 9
+            total += value
+
+        return total % 10 == 0
+
+    def _create_deterministic_detection(
+        self,
+        pii_type: PIIType,
+        pii_text: str,
+        start_char: int,
+        end_char: int,
+        full_text: str,
+        transcription_start_time: float
+    ) -> PIIDetection:
+        """Create a deterministic PIIDetection with estimated timing."""
+        estimated_start_time, estimated_end_time = self._estimate_detection_times(
+            full_text,
+            pii_text,
+            start_char,
+            transcription_start_time
+        )
+
+        return PIIDetection(
+            pii_type=pii_type,
+            text=pii_text,
+            start_char=start_char,
+            end_char=end_char,
+            confidence=self.deterministic_confidence,
+            start_time=estimated_start_time,
+            end_time=estimated_end_time,
+            word_indices=[]
+        )
+
+    def _estimate_detection_times(
+        self,
+        text: str,
+        pii_text: str,
+        start_char: int,
+        transcription_start_time: float
+    ) -> Tuple[float, float]:
+        """Estimate detection start/end timestamps from character position."""
+        text_position_ratio = start_char / len(text) if len(text) > 0 else 0
+        estimated_start_time = transcription_start_time + (text_position_ratio * 5.0)
+        estimated_end_time = estimated_start_time + (len(pii_text.split()) * 0.4)
+        return estimated_start_time, estimated_end_time
+
+    def _merge_detections(
+        self,
+        model_detections: List[PIIDetection],
+        deterministic_detections: List[PIIDetection]
+    ) -> List[PIIDetection]:
+        """Merge model and deterministic detections while avoiding duplicate overlaps."""
+        merged = list(model_detections)
+
+        for deterministic_detection in deterministic_detections:
+            overlapping_index = next(
+                (
+                    idx for idx, detection in enumerate(merged)
+                    if self._detections_overlap(detection, deterministic_detection)
+                ),
+                None
+            )
+
+            if overlapping_index is None:
+                merged.append(deterministic_detection)
+                continue
+
+            existing_detection = merged[overlapping_index]
+            if (
+                deterministic_detection.confidence > existing_detection.confidence
+                or (
+                    deterministic_detection.confidence == existing_detection.confidence
+                    and len(deterministic_detection.text) > len(existing_detection.text)
+                )
+            ):
+                merged[overlapping_index] = deterministic_detection
+
+        return sorted(merged, key=lambda detection: detection.start_char)
+
+    def _detections_overlap(
+        self,
+        first_detection: PIIDetection,
+        second_detection: PIIDetection
+    ) -> bool:
+        """Return whether two detections overlap in character span."""
+        return (
+            first_detection.start_char < second_detection.end_char
+            and second_detection.start_char < first_detection.end_char
+        )
     
     def _extract_detections(
         self,
