@@ -99,7 +99,7 @@ class WhisperProcessor:
                     device=self.device,
                     compute_type=self.compute_type
                 )
-            except Exception as exc:
+            except (ImportError, ModuleNotFoundError, OSError, RuntimeError, ValueError) as exc:
                 self.logger.warning(
                     "faster_whisper backend failed to initialize (%s); falling back to openai_whisper",
                     exc

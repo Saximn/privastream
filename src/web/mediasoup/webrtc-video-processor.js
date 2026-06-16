@@ -263,10 +263,10 @@ class WebRTCVideoProcessor extends EventEmitter {
     const x2 = Math.min(this.options.frameWidth, center.x + width / 2);
     const y2 = Math.min(this.options.frameHeight, center.y + height / 2);
     return [
-      Math.min(x1, x2),
-      Math.min(y1, y2),
-      Math.max(x1, x2),
-      Math.max(y1, y2)
+      x1,
+      y1,
+      x2,
+      y2
     ];
   }
 

@@ -583,12 +583,14 @@ def update_queue_config():
         if not data:
             return jsonify({"error": "No configuration data provided"}), 400
 
-        def _coerce_status_code(value):
+        def _validate_and_clamp_status_code(value):
             if isinstance(value, bool):
+                app.logger.warning("Ignoring boolean status code value for /queue-config: %s", value)
                 return None
             try:
                 return max(400, min(599, int(value)))
             except (TypeError, ValueError):
+                app.logger.warning("Ignoring invalid status code value for /queue-config: %s", value)
                 return None
         
         # Update configuration
@@ -601,11 +603,11 @@ def update_queue_config():
         if "queue_monitoring" in data:
             QUEUE_CONFIG["queue_monitoring"] = bool(data["queue_monitoring"])
         if "overload_status_code" in data:
-            overload_code = _coerce_status_code(data["overload_status_code"])
+            overload_code = _validate_and_clamp_status_code(data["overload_status_code"])
             if overload_code is not None:
                 QUEUE_CONFIG["overload_status_code"] = overload_code
         if "stale_status_code" in data:
-            stale_code = _coerce_status_code(data["stale_status_code"])
+            stale_code = _validate_and_clamp_status_code(data["stale_status_code"])
             if stale_code is not None:
                 QUEUE_CONFIG["stale_status_code"] = stale_code
         
