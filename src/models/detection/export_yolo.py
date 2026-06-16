@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Export a YOLO model to ONNX or TensorRT for production serving."""
 import argparse
+import shutil
 from pathlib import Path
 
 from ultralytics import YOLO
@@ -51,7 +52,7 @@ def main():
         output_dir.mkdir(parents=True, exist_ok=True)
         target = output_dir / exported.name
         if exported != target:
-            exported.replace(target)
+            shutil.move(str(exported), str(target))
             exported = target
 
     print(f"Exported {args.format} artifact: {exported}")

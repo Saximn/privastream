@@ -434,13 +434,12 @@ def process_frame_route():
             response_payload = {
                 "success": True,
                 "frame_id": frame_id,
+                "frame": processed_frame_b64,
                 "rectangles": rectangles,
                 "processing_mode": "blur_only" if blur_only else ("detect_only" if detect_only else "full"),
                 "regions_processed": len(rectangles),
                 "timings": timings,
             }
-            if processed_frame_b64 is not None:
-                response_payload["frame"] = processed_frame_b64
 
             return jsonify(response_payload)
         
@@ -583,6 +582,14 @@ def update_queue_config():
         data = request.get_json()
         if not data:
             return jsonify({"error": "No configuration data provided"}), 400
+
+        def _coerce_status_code(value):
+            if isinstance(value, bool):
+                return None
+            try:
+                return max(400, min(599, int(value)))
+            except (TypeError, ValueError):
+                return None
         
         # Update configuration
         if "max_request_age_ms" in data:
@@ -594,9 +601,13 @@ def update_queue_config():
         if "queue_monitoring" in data:
             QUEUE_CONFIG["queue_monitoring"] = bool(data["queue_monitoring"])
         if "overload_status_code" in data:
-            QUEUE_CONFIG["overload_status_code"] = int(data["overload_status_code"])
+            overload_code = _coerce_status_code(data["overload_status_code"])
+            if overload_code is not None:
+                QUEUE_CONFIG["overload_status_code"] = overload_code
         if "stale_status_code" in data:
-            QUEUE_CONFIG["stale_status_code"] = int(data["stale_status_code"])
+            stale_code = _coerce_status_code(data["stale_status_code"])
+            if stale_code is not None:
+                QUEUE_CONFIG["stale_status_code"] = stale_code
         
         return jsonify({
             "success": True, 

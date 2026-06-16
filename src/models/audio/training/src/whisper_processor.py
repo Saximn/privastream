@@ -92,12 +92,19 @@ class WhisperProcessor:
     def _load_model(self):
         """Load the preferred Whisper backend, falling back to openai-whisper."""
         if self.backend == "faster_whisper":
-            faster_whisper = importlib.import_module("faster_whisper")
-            return faster_whisper.WhisperModel(
-                self.model_name,
-                device=self.device,
-                compute_type=self.compute_type
-            )
+            try:
+                faster_whisper = importlib.import_module("faster_whisper")
+                return faster_whisper.WhisperModel(
+                    self.model_name,
+                    device=self.device,
+                    compute_type=self.compute_type
+                )
+            except Exception as exc:
+                self.logger.warning(
+                    "faster_whisper backend failed to initialize (%s); falling back to openai_whisper",
+                    exc
+                )
+                self.backend = "openai_whisper"
 
         openai_whisper = importlib.import_module("whisper")
         return openai_whisper.load_model(

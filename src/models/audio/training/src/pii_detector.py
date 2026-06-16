@@ -364,7 +364,10 @@ class PIIDetector:
                     transcription_start_time
                 ))
 
-        return self._merge_detections([], detections)
+        merged_detections: List[PIIDetection] = []
+        for detection in detections:
+            merged_detections = self._merge_detections(merged_detections, [detection])
+        return merged_detections
 
     def _compile_keyword_pattern(self) -> Optional[re.Pattern]:
         """Compile configured sensitive keyword phrases."""
