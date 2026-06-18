@@ -8,6 +8,7 @@ const { Transform } = require('stream');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 require('dotenv').config();
 const API_CONFIG = require('./config').default;
@@ -85,6 +86,47 @@ app.use(express.json());
 const io = new Server(server, {
   cors: { origin: "*", methods: ["GET", "POST"] }
 });
+
+// --- Room-token auth (mirrors src/web/backend/auth.py; HMAC-SHA256) ---------
+const REQUIRE_AUTH = (process.env.REQUIRE_AUTH || 'false').toLowerCase() === 'true';
+
+function b64uFromBuffer(buf) {
+  return buf.toString('base64').replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
+}
+
+function verifyRoomToken(token, roomId) {
+  try {
+    const secret = process.env.SECRET_KEY;
+    if (!secret || !token) return null;
+    const [body, sig] = String(token).split('.');
+    if (!body || !sig) return null;
+    const expected = b64uFromBuffer(crypto.createHmac('sha256', secret).update(body).digest());
+    const a = Buffer.from(sig);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+    const payload = JSON.parse(
+      Buffer.from(body.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')
+    );
+    if ((payload.exp || 0) < Math.floor(Date.now() / 1000)) return null;
+    if (roomId && payload.room_id !== roomId) return null;
+    return payload;
+  } catch (err) {
+    return null;
+  }
+}
+
+// Reject sockets without a valid signed token when REQUIRE_AUTH is on. Off by
+// default so local dev is unaffected; the token rides in the handshake auth.
+if (REQUIRE_AUTH) {
+  io.use((socket, next) => {
+    const token = socket.handshake.auth && socket.handshake.auth.token;
+    const payload = verifyRoomToken(token);
+    if (!payload) return next(new Error('Unauthorized'));
+    socket.data.auth = payload;
+    next();
+  });
+  console.log('[SERVER] 🔒 REQUIRE_AUTH enabled — room tokens required');
+}
 
 // Mediasoup codec config
 const mediaCodecs = [

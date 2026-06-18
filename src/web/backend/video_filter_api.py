@@ -31,6 +31,30 @@ except ImportError:
 app = Flask(__name__)
 CORS(app, origins="*")
 
+from functools import wraps
+import auth
+
+
+def require_room_token(f):
+    """Reject requests without a valid room token when REQUIRE_AUTH is on.
+
+    No-op when REQUIRE_AUTH is unset (local dev). The token is read from the
+    Authorization: Bearer header and must match the request's room_id (from the
+    JSON body or the path parameter).
+    """
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not auth.auth_required():
+            return f(*args, **kwargs)
+        header = request.headers.get('Authorization', '')
+        token = header[7:] if header.startswith('Bearer ') else header
+        body = request.get_json(silent=True) or {}
+        room_id = kwargs.get('room_id') or body.get('room_id')
+        if auth.verify_room_token(token, room_id) is None:
+            return jsonify({"error": "Unauthorized"}), 401
+        return f(*args, **kwargs)
+    return wrapper
+
 # PERFORMANCE CONFIGURATION - Easy to adjust
 DETECTION_FPS = 30.0  # FPS for face/privacy detection (lower = less latency, higher = more CPU load)
 # Conversion: 30fps input -> stride calculation
@@ -311,6 +335,7 @@ def health():
     return {'status': 'healthy', 'detector_ready': detector is not None and detector != "failed"}
 
 @app.route('/process-frame', methods=['POST'])
+@require_room_token
 def process_frame_route():
     """Flask route to process a single frame with detection or blur-only mode."""
     processing_started = False
@@ -552,6 +577,7 @@ def update_queue_config():
 
 # Face Enrollment Endpoints
 @app.route('/face-detection', methods=['POST'])
+@require_room_token
 def face_detection():
     """Live face detection endpoint for enrollment"""
     global face_app
@@ -639,6 +665,7 @@ def face_detection():
         }), 500
 
 @app.route('/face-enrollment', methods=['POST'])
+@require_room_token
 def face_enrollment():
     """Face enrollment endpoint"""
     global face_app, room_embeddings
@@ -802,6 +829,7 @@ def cleanup_room(room_id: str):
         }), 500
 
 @app.route('/detect-faces-mouths', methods=['POST'])
+@require_room_token
 def detect_faces_and_mouths():
     """Fast face + mouth landmark detection AND PII/plate detection for immediate caching"""
     processing_started = False
@@ -932,7 +960,8 @@ def detect_faces_and_mouths():
         print(f"[API] Fast detection error: {e}")
         return jsonify({"error": str(e)}), 500
 
-@app.route('/apply-conditional-blur', methods=['POST'])  
+@app.route('/apply-conditional-blur', methods=['POST'])
+@require_room_token
 def apply_conditional_blur():
     """Apply face blur + conditional mouth blur + PII blur + plate blur"""
     try:

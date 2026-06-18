@@ -4,6 +4,7 @@ from flask_cors import CORS
 import uuid
 from dotenv import load_dotenv
 import os
+import secrets
 import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -14,6 +15,7 @@ load_dotenv()
 sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 from privastream.core.config import web_config
 from privastream.core.logging import logger
+import auth
 
 # Constants
 DEFAULT_MEDIASOUP_URL = 'http://localhost:3001'
@@ -29,7 +31,8 @@ class RoomManager:
     
     def create_room(self, host_sid: str) -> str:
         """Create a new room with host"""
-        room_id = str(uuid.uuid4())[:ROOM_ID_LENGTH]
+        # Opaque, high-entropy id (the old uuid4()[:8] was guessable/brute-forceable).
+        room_id = secrets.token_urlsafe(9)
         self.rooms[room_id] = {
             'host': host_sid,
             'viewers': [],
@@ -144,7 +147,17 @@ def handle_create_room():
             user['role'] = 'host'
             user['room'] = room_id
         
-        emit('room_created', {'roomId': room_id, 'mediasoupUrl': MEDIASOUP_SERVER_URL})
+        # Issue a signed host token the client forwards to the SFU / detection
+        # service. No-op when SECRET_KEY is unset (local dev) so room creation
+        # keeps working; enforcement is gated by REQUIRE_AUTH on each service.
+        token = None
+        try:
+            if os.getenv('SECRET_KEY'):
+                token = auth.issue_room_token(room_id, role='host')
+        except Exception as exc:
+            logger.warning(f'Could not issue room token: {exc}')
+
+        emit('room_created', {'roomId': room_id, 'mediasoupUrl': MEDIASOUP_SERVER_URL, 'token': token})
         logger.info(f'Room {room_id} created with SFU support (Host: {request.sid})')
     except Exception as e:
         logger.error(f'Error creating room: {e}')
