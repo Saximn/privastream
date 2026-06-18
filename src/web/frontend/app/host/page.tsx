@@ -27,7 +27,7 @@ export default function Host() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const frameIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
-  const audioProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const audioProcessorRef = useRef<AudioWorkletNode | null>(null);
 
   useEffect(() => {
     const initializeConnections = async () => {
@@ -354,7 +354,7 @@ export default function Host() {
     console.log("[DEBUG] Frame processing started");
   };
 
-  const startAudioProcessing = (stream: MediaStream) => {
+  const startAudioProcessing = async (stream: MediaStream) => {
     console.log("[DEBUG] Starting audio processing for redaction");
 
     const audioTrack = stream.getAudioTracks()[0];
@@ -374,67 +374,35 @@ export default function Host() {
         state: audioContext.state,
       });
 
-      // Create media stream source
+      // Load the AudioWorklet that downmixes to mono and anti-alias downsamples
+      // to 16 kHz on the audio render thread (replaces the deprecated
+      // ScriptProcessorNode + naïve every-3rd-sample decimation).
+      await audioContext.audioWorklet.addModule("/pcm-downsampler-worklet.js");
+
       const source = audioContext.createMediaStreamSource(stream);
+      const workletNode = new AudioWorkletNode(audioContext, "pcm-downsampler", {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [1],
+        processorOptions: { targetSampleRate: 16000 },
+      });
+      audioProcessorRef.current = workletNode;
 
-      // Create script processor node (deprecated but still works)
-      const bufferSize = 4096; // Buffer size for processing
-      const processor = audioContext.createScriptProcessor(bufferSize, 2, 2); // Stereo
-      audioProcessorRef.current = processor;
-
-      // Process audio data
-      processor.onaudioprocess = (event) => {
-        const inputBuffer = event.inputBuffer;
-        const outputBuffer = event.outputBuffer;
-
-        // Get left and right channel data
-        const leftChannel = inputBuffer.getChannelData(0);
-        const rightChannel = inputBuffer.getChannelData(1);
-
-        // Mix stereo to mono by averaging channels
-        const monoData = new Float32Array(bufferSize);
-        for (let i = 0; i < bufferSize; i++) {
-          monoData[i] = (leftChannel[i] + rightChannel[i]) / 2;
-        }
-
-        // Downsample from 48kHz to 16kHz (3:1 ratio)
-        const downsampleRatio = 3;
-        const outputSamples = Math.floor(bufferSize / downsampleRatio);
-        const downsampledData = new Float32Array(outputSamples);
-
-        for (let i = 0; i < outputSamples; i++) {
-          // Simple downsampling - take every 3rd sample
-          downsampledData[i] = monoData[i * downsampleRatio];
-        }
-
-        // Convert float32 to int16 PCM data (16kHz mono)
-        const pcmData = new Int16Array(outputSamples);
-        for (let i = 0; i < outputSamples; i++) {
-          const sample = Math.max(-1, Math.min(1, downsampledData[i]));
-          pcmData[i] = sample * 0x7fff;
-        }
-
-        // Send PCM data to server for processing
+      // The worklet posts 16-bit PCM (16 kHz mono) as a transferred ArrayBuffer.
+      // Send it straight over the socket as a binary frame (see Phase 5 /
+      // docs/IMPROVEMENTS.md §2.1 for the matching server-side decode).
+      workletNode.port.onmessage = (event: MessageEvent) => {
         if (sfuSocketRef.current) {
-          sfuSocketRef.current.emit("audio-data", Array.from(pcmData));
-        }
-
-        // Copy input to output but muted to avoid feedback
-        for (
-          let channel = 0;
-          channel < outputBuffer.numberOfChannels;
-          channel++
-        ) {
-          const outputData = outputBuffer.getChannelData(channel);
-          outputData.fill(0); // Fill with silence to prevent feedback
+          sfuSocketRef.current.emit("audio-data", event.data as ArrayBuffer);
         }
       };
 
-      // Connect audio processing chain
-      source.connect(processor);
-      processor.connect(audioContext.destination); // Connect to ensure processing happens
+      // Connect source -> worklet -> destination. The worklet leaves its output
+      // silent, so connecting to destination keeps it scheduled without feedback.
+      source.connect(workletNode);
+      workletNode.connect(audioContext.destination);
 
-      console.log("[DEBUG] Audio processing pipeline connected");
+      console.log("[DEBUG] AudioWorklet processing pipeline connected");
     } catch (error) {
       console.error("[DEBUG] Audio processing setup error:", error);
     }
