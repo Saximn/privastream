@@ -8,6 +8,12 @@ import { Button } from "@/components/ui/button";
 export default function Home() {
   const [roomId, setRoomId] = useState("");
   const router = useRouter();
+  const fundraisingGoalSgd = 200;
+  const raisedAmountSgd = 0;
+  const fundraisingProgress =
+    fundraisingGoalSgd > 0
+      ? Math.round((raisedAmountSgd / fundraisingGoalSgd) * 100)
+      : 0;
 
   // const createRoom = () => {
   //   router.push("/host");
@@ -39,6 +45,30 @@ export default function Home() {
               Advanced virtual device app with face recognition, privacy
               protection, and streaming safety features.
             </p>
+            <div className="max-w-2xl mx-auto bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl p-6 text-left">
+              <p className="text-sm font-semibold text-black dark:text-white mb-2">
+                Fundraising for parent feature completion
+              </p>
+              <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">
+                Help us reach SGD {fundraisingGoalSgd} to complete the parent
+                feature.
+              </p>
+              <div className="w-full h-3 bg-gray-200 dark:bg-gray-700 rounded-full mb-2 overflow-hidden">
+                <div
+                  className="h-full bg-black dark:bg-white"
+                  style={{ width: `${fundraisingProgress}%` }}
+                />
+              </div>
+              <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">
+                SGD {raisedAmountSgd} / SGD {fundraisingGoalSgd}
+              </p>
+              <Link
+                href="https://github.com/Saximn/privastream/issues/14"
+                className="inline-flex items-center justify-center rounded-md bg-black px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 dark:bg-white dark:text-black dark:hover:bg-gray-200 transition-colors"
+              >
+                Contribute to this fundraiser
+              </Link>
+            </div>
           </div>
 
           {/* Full Width Divider */}
