@@ -5,6 +5,39 @@ import { SocketManager } from "@/lib/socket";
 import { MediasoupClient } from "@/lib/mediasoup-client";
 import { io, Socket } from "socket.io-client";
 import API_CONFIG from "@/lib/config";
+import {
+  VideoBlurPipeline,
+  insertableStreamsSupported,
+  type BlurBox,
+} from "@/lib/video-blur-pipeline";
+
+// Normalise the Python detector's region arrays into [x, y, w, h] blur boxes.
+// NOTE: the detector's exact box format is assumed here (x1,y1,x2,y2 when the
+// last two values exceed the first two, else x,y,w,h). Verify against the live
+// /detect-faces-mouths response and adjust if needed.
+function toBlurBoxes(result: any): BlurBox[] {
+  const groups = [
+    result?.face_blur_regions,
+    result?.mouth_regions,
+    result?.pii_regions,
+    result?.plate_regions,
+  ];
+  const out: BlurBox[] = [];
+  for (const group of groups) {
+    if (!Array.isArray(group)) continue;
+    for (const r of group) {
+      if (Array.isArray(r) && r.length >= 4) {
+        const [a, b, c, d] = r;
+        const looksLikeCorners = c > a && d > b;
+        out.push([a, b, looksLikeCorners ? c - a : c, looksLikeCorners ? d - b : d]);
+      } else if (r && typeof r === "object") {
+        if ("w" in r && "h" in r) out.push([r.x, r.y, r.w, r.h]);
+        else if ("x2" in r) out.push([r.x1, r.y1, r.x2 - r.x1, r.y2 - r.y1]);
+      }
+    }
+  }
+  return out;
+}
 
 export default function Host() {
   const [roomId, setRoomId] = useState("");
@@ -34,7 +67,8 @@ export default function Host() {
   // (processEveryNthFrame). Capturing faster just wastes encode + bandwidth.
   const TARGET_CAPTURE_FPS = 4;
   const audioContextRef = useRef<AudioContext | null>(null);
-  const audioProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const audioProcessorRef = useRef<AudioWorkletNode | null>(null);
+  const blurPipelineRef = useRef<VideoBlurPipeline | null>(null);
 
   useEffect(() => {
     const initializeConnections = async () => {
@@ -202,6 +236,8 @@ export default function Host() {
       if (audioContextRef.current) {
         audioContextRef.current.close();
       }
+      blurPipelineRef.current?.stop();
+      blurPipelineRef.current = null;
       localStreamRef.current?.getTracks().forEach((track) => track.stop());
       mediasoupClientRef.current?.stopProducing();
       socketRef.current?.disconnect();
@@ -255,9 +291,30 @@ export default function Host() {
         "[DEBUG] Producing stream with video filter:",
         isVideoFilterEnabled
       );
-      await mediasoupClientRef.current.produce(stream, isVideoFilterEnabled);
 
-      // Start frame processing for video filter
+      // With the video filter on, blur faces/PII locally (Insertable Streams)
+      // and produce the ALREADY-PRIVATE track to the SFU; viewers consume it
+      // directly (no JPEG-over-socket). Refuse to stream if the browser can't
+      // blur locally, rather than leaking un-redacted video.
+      let videoTrackToProduce: MediaStreamTrack | undefined;
+      if (isVideoFilterEnabled) {
+        if (!insertableStreamsSupported()) {
+          throw new Error(
+            "This browser can't blur video locally (needs a Chromium-based browser). Refusing to stream un-redacted video."
+          );
+        }
+        const pipeline = new VideoBlurPipeline();
+        blurPipelineRef.current = pipeline;
+        videoTrackToProduce = pipeline.start(stream.getVideoTracks()[0]);
+      }
+
+      await mediasoupClientRef.current.produce(
+        stream,
+        isVideoFilterEnabled,
+        videoTrackToProduce
+      );
+
+      // Drive detection: fetch coordinates from Python and feed the pipeline.
       if (isVideoFilterEnabled) {
         startFrameProcessing(stream);
       }
@@ -288,6 +345,10 @@ export default function Host() {
         frameIntervalRef.current = null;
       }
 
+      // Stop the client-side blur pipeline
+      blurPipelineRef.current?.stop();
+      blurPipelineRef.current = null;
+
       // Stop audio processing
       if (audioProcessorRef.current) {
         audioProcessorRef.current.disconnect();
@@ -314,18 +375,21 @@ export default function Host() {
     }
   };
 
+  // Detection loop for Option B: sample frames at a low rate, ask Python for
+  // detection COORDINATES only (no server-side blur, no JPEG re-broadcast), and
+  // feed them to the local blur pipeline. Pixels never leave as base64.
   const startFrameProcessing = (stream: MediaStream) => {
-    console.log("[DEBUG] Starting frame processing for video filter");
+    console.log("[DEBUG] Starting detection loop for client-side blur");
 
-    // Create canvas for frame extraction
+    const pipeline = blurPipelineRef.current;
+    if (!pipeline) return;
+
     if (!canvasRef.current) {
       canvasRef.current = document.createElement("canvas");
     }
-
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d")!;
 
-    // Create a video element for frame extraction
     const tempVideo = document.createElement("video");
     tempVideo.srcObject = stream;
     tempVideo.muted = true;
@@ -334,36 +398,41 @@ export default function Host() {
 
     const minFrameIntervalMs = 1000 / TARGET_CAPTURE_FPS;
     let lastCaptureTs = 0;
-    let inFlight = false; // back-pressure: never queue a new frame over an unfinished one
+    let inFlight = false; // back-pressure: skip a tick if Python hasn't responded yet
     let stopped = false;
 
-    const captureFrame = () => {
+    // Sample a frame, ask Python for detection COORDINATES only (no server-side
+    // blur, no JPEG re-broadcast), and feed the boxes to the local blur
+    // pipeline. The host blurs locally before the encoder, so the SFU never
+    // sees un-redacted pixels — base64 frames never leave. See IMPROVEMENTS §1.
+    const captureFrame = async () => {
       if (stopped || inFlight) return;
       if (tempVideo.videoWidth === 0 || tempVideo.videoHeight === 0) return;
 
       inFlight = true;
       try {
-        // Match canvas to the source frame and draw it
         canvas.width = tempVideo.videoWidth;
         canvas.height = tempVideo.videoHeight;
         ctx.drawImage(tempVideo, 0, 0);
+        const frameData = canvas.toDataURL("image/jpeg", 0.6);
 
-        // NOTE: toDataURL is synchronous main-thread work and base64 inflates
-        // the payload ~33%. See docs/IMPROVEMENTS.md §1.3 for the binary/worker
-        // follow-up. Kept here to preserve the existing server/Python contract.
-        const frameData = canvas.toDataURL("image/jpeg", 0.7);
-        const timestamp = Date.now();
-
-        if (sfuSocketRef.current) {
-          sfuSocketRef.current.emit("video-frame", {
-            frame: frameData,
-            frameId: timestamp,
-            timestamp, // used by the server for delivery-delay calculations
-            roomId,
-          });
+        const res = await fetch(
+          `${API_CONFIG.VIDEO_API_URL}detect-faces-mouths`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              frame: frameData,
+              frame_id: Date.now(),
+              room_id: roomId,
+            }),
+          }
+        );
+        if (res.ok) {
+          pipeline.setBoxes(toBlurBoxes(await res.json()));
         }
       } catch (error) {
-        console.error("[DEBUG] Frame processing error:", error);
+        console.error("[DEBUG] Detection loop error:", error);
       } finally {
         inFlight = false;
       }
@@ -401,11 +470,11 @@ export default function Host() {
     };
 
     console.log(
-      `[DEBUG] Frame processing started at ${TARGET_CAPTURE_FPS} FPS (rVFC=${hasRVFC})`
+      `[DEBUG] Detection loop started at ${TARGET_CAPTURE_FPS} FPS (rVFC=${hasRVFC})`
     );
   };
 
-  const startAudioProcessing = (stream: MediaStream) => {
+  const startAudioProcessing = async (stream: MediaStream) => {
     console.log("[DEBUG] Starting audio processing for redaction");
 
     const audioTrack = stream.getAudioTracks()[0];
@@ -425,70 +494,35 @@ export default function Host() {
         state: audioContext.state,
       });
 
-      // Create media stream source
+      // Load the AudioWorklet that downmixes to mono and anti-alias downsamples
+      // to 16 kHz on the audio render thread (replaces the deprecated
+      // ScriptProcessorNode + naïve every-3rd-sample decimation).
+      await audioContext.audioWorklet.addModule("/pcm-downsampler-worklet.js");
+
       const source = audioContext.createMediaStreamSource(stream);
+      const workletNode = new AudioWorkletNode(audioContext, "pcm-downsampler", {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [1],
+        processorOptions: { targetSampleRate: 16000 },
+      });
+      audioProcessorRef.current = workletNode;
 
-      // Create script processor node (deprecated but still works)
-      const bufferSize = 4096; // Buffer size for processing
-      const processor = audioContext.createScriptProcessor(bufferSize, 2, 2); // Stereo
-      audioProcessorRef.current = processor;
-
-      // Process audio data
-      processor.onaudioprocess = (event) => {
-        const inputBuffer = event.inputBuffer;
-        const outputBuffer = event.outputBuffer;
-
-        // Get left and right channel data
-        const leftChannel = inputBuffer.getChannelData(0);
-        const rightChannel = inputBuffer.getChannelData(1);
-
-        // Mix stereo to mono by averaging channels
-        const monoData = new Float32Array(bufferSize);
-        for (let i = 0; i < bufferSize; i++) {
-          monoData[i] = (leftChannel[i] + rightChannel[i]) / 2;
-        }
-
-        // Downsample from 48kHz to 16kHz (3:1 ratio)
-        const downsampleRatio = 3;
-        const outputSamples = Math.floor(bufferSize / downsampleRatio);
-        const downsampledData = new Float32Array(outputSamples);
-
-        for (let i = 0; i < outputSamples; i++) {
-          // Simple downsampling - take every 3rd sample
-          downsampledData[i] = monoData[i * downsampleRatio];
-        }
-
-        // Convert float32 to int16 PCM data (16kHz mono)
-        const pcmData = new Int16Array(outputSamples);
-        for (let i = 0; i < outputSamples; i++) {
-          const sample = Math.max(-1, Math.min(1, downsampledData[i]));
-          pcmData[i] = sample * 0x7fff;
-        }
-
-        // Send PCM data to server for processing as a binary ArrayBuffer.
-        // Socket.IO transmits this as a binary frame — far smaller than the old
-        // JSON number array (which serialized every 16-bit sample as ASCII
-        // digits, ~5-10x the raw PCM size). See docs/IMPROVEMENTS.md §2.1.
+      // The worklet posts 16-bit PCM (16 kHz mono) as a transferred ArrayBuffer.
+      // Send it straight over the socket as a binary frame (see Phase 5 /
+      // docs/IMPROVEMENTS.md §2.1 for the matching server-side decode).
+      workletNode.port.onmessage = (event: MessageEvent) => {
         if (sfuSocketRef.current) {
-          sfuSocketRef.current.emit("audio-data", pcmData.buffer);
-        }
-
-        // Copy input to output but muted to avoid feedback
-        for (
-          let channel = 0;
-          channel < outputBuffer.numberOfChannels;
-          channel++
-        ) {
-          const outputData = outputBuffer.getChannelData(channel);
-          outputData.fill(0); // Fill with silence to prevent feedback
+          sfuSocketRef.current.emit("audio-data", event.data as ArrayBuffer);
         }
       };
 
-      // Connect audio processing chain
-      source.connect(processor);
-      processor.connect(audioContext.destination); // Connect to ensure processing happens
+      // Connect source -> worklet -> destination. The worklet leaves its output
+      // silent, so connecting to destination keeps it scheduled without feedback.
+      source.connect(workletNode);
+      workletNode.connect(audioContext.destination);
 
-      console.log("[DEBUG] Audio processing pipeline connected");
+      console.log("[DEBUG] AudioWorklet processing pipeline connected");
     } catch (error) {
       console.error("[DEBUG] Audio processing setup error:", error);
     }

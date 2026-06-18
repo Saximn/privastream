@@ -84,23 +84,13 @@ console.log(API_CONFIG);
 
 // Import Audio Redaction Processor
 const { AudioRedactionProcessor } = require('./audio-redaction-processor');
-// Import WebRTC Video Processor
-const { WebRTCVideoProcessor } = require('./webrtc-video-processor');
 
-// Initialize Audio Redaction Processor  
+// Initialize Audio Redaction Processor
 const audioRedactionProcessor = new AudioRedactionProcessor({
   redactionServiceUrl: API_CONFIG.AUDIO_API_URL,
   sampleRate: 16000,  // Match Vosk requirements
   channels: 1,        // Mono for better transcription
   bufferDurationMs: 3000
-});
-
-// Initialize WebRTC Video Processor
-const videoProcessor = new WebRTCVideoProcessor({
-  videoServiceUrl: `${API_CONFIG.VIDEO_API_URL}`,
-  frameRate: 30,
-  processEveryNthFrame: 15,
-  bufferDurationMs: 3000  // Match audio processing timing
 });
 
 const app = express();
@@ -182,9 +172,6 @@ const frameAudioMapping = new Map();  // roomId -> {pendingFrames: [frameId], au
 
 // Frame buffer for video filters
 const frameBuffer = new Map(); // roomId -> [{frame, timestamp}]
-
-// Audio chunk timing tracking for sync
-const audioChunkStartTimes = new Map(); // roomId -> [startTime1, startTime2, ...]
 
 // Jitter buffer for delayed audio delivery. Replaces a per-chunk setTimeout
 // (one live timer per audio chunk, each pinning a payload on the heap) with a
@@ -486,9 +473,6 @@ io.on('connection', socket => {
     };
     rooms.set(roomId, room);
     socket.join(roomId);
-    
-    // Initialize audio chunk timing tracking
-    audioChunkStartTimes.set(roomId, []);
     
     // Set up audio processing for this room (since audio is handled via socket events, not WebRTC producers)
     console.log('[AUDIO-SERVER] 🎤 Setting up audio redaction for room:', roomId);
@@ -865,13 +849,14 @@ io.on('connection', socket => {
     // Video is handled via processed-video-frame socket events
     // Audio is handled via processed-audio socket events
     const producers = Array.from(room.hostProducers.entries()).map(([kind, producer]) => {
-      // Skip video producers - video handled via socket events
+      // Video is now blurred on the host (client-side Insertable Streams) before
+      // it reaches the SFU, so viewers consume the WebRTC video track directly.
       if (kind === 'video') {
-        console.log('[VIDEO-SERVER] ❌ Skipping video producer - using processed frames via socket events');
-        return null;
+        console.log('[VIDEO-SERVER] ✅ Exposing blurred video producer for consumption');
+        return { id: producer.id, kind: kind };
       }
-      
-      // Skip audio producers - audio handled via socket events  
+
+      // Skip audio producers - audio handled via socket events
       if (kind === 'audio') {
         console.log('[VIDEO-SERVER] ❌ Skipping audio producer - using processed audio via socket events');
         return null;
@@ -969,9 +954,6 @@ io.on('connection', socket => {
         } catch (error) {
           console.error('[SERVER] Error calling video cleanup:', error);
         }
-        
-        // Clean up audio timing tracking
-        audioChunkStartTimes.delete(roomId);
         
         rooms.delete(roomId);
       } else if (room.viewers.has(socket.id)) {

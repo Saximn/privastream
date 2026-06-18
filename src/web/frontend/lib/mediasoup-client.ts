@@ -82,7 +82,7 @@ export class MediasoupClient {
     console.log('[MediasoupClient] Producer transport created')
   }
 
-  async produce(stream: MediaStream, enableVideoFilter: boolean = false) {
+  async produce(stream: MediaStream, enableVideoFilter: boolean = false, videoTrackOverride?: MediaStreamTrack) {
     if (!this.producerTransport) throw new Error('Producer transport not initialized')
     console.log('[MediasoupClient] Starting to produce tracks from local stream...')
     
@@ -94,7 +94,9 @@ export class MediasoupClient {
       audioTracks: stream.getAudioTracks().length
     })
 
-    const videoTrack = stream.getVideoTracks()[0]
+    // Prefer a caller-supplied (already-blurred) track so the SFU never sees
+    // un-redacted pixels. Falls back to the raw camera track.
+    const videoTrack = videoTrackOverride || stream.getVideoTracks()[0]
     if (videoTrack) {
       console.log('[MediasoupClient] Video track details:', {
         id: videoTrack.id,
