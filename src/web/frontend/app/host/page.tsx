@@ -26,6 +26,13 @@ export default function Host() {
   const mediasoupClientRef = useRef<MediasoupClient | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const frameIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  // Teardown for the frame-capture loop (covers both requestVideoFrameCallback
+  // and the setInterval fallback). Set in startFrameProcessing.
+  const stopFrameCaptureRef = useRef<(() => void) | null>(null);
+
+  // Detection runs at a low frame rate; the server samples ~2 frames/sec
+  // (processEveryNthFrame). Capturing faster just wastes encode + bandwidth.
+  const TARGET_CAPTURE_FPS = 4;
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioProcessorRef = useRef<ScriptProcessorNode | null>(null);
 
@@ -181,6 +188,8 @@ export default function Host() {
 
     return () => {
       // Cleanup
+      stopFrameCaptureRef.current?.();
+      stopFrameCaptureRef.current = null;
       if (frameIntervalRef.current) {
         clearInterval(frameIntervalRef.current);
       }
@@ -269,6 +278,8 @@ export default function Host() {
   const stopStreaming = async () => {
     try {
       // Stop frame processing
+      stopFrameCaptureRef.current?.();
+      stopFrameCaptureRef.current = null;
       if (frameIntervalRef.current) {
         clearInterval(frameIntervalRef.current);
         frameIntervalRef.current = null;
@@ -318,40 +329,77 @@ export default function Host() {
     tempVideo.playsInline = true;
     tempVideo.play();
 
-    // Process frames at 4 FPS (every 250ms)
-    frameIntervalRef.current = setInterval(() => {
+    const minFrameIntervalMs = 1000 / TARGET_CAPTURE_FPS;
+    let lastCaptureTs = 0;
+    let inFlight = false; // back-pressure: never queue a new frame over an unfinished one
+    let stopped = false;
+
+    const captureFrame = () => {
+      if (stopped || inFlight) return;
+      if (tempVideo.videoWidth === 0 || tempVideo.videoHeight === 0) return;
+
+      inFlight = true;
       try {
-        if (tempVideo.videoWidth > 0 && tempVideo.videoHeight > 0) {
-          // Set canvas size to match video
-          canvas.width = tempVideo.videoWidth;
-          canvas.height = tempVideo.videoHeight;
+        // Match canvas to the source frame and draw it
+        canvas.width = tempVideo.videoWidth;
+        canvas.height = tempVideo.videoHeight;
+        ctx.drawImage(tempVideo, 0, 0);
 
-          // Draw current video frame to canvas
-          ctx.drawImage(tempVideo, 0, 0);
+        // NOTE: toDataURL is synchronous main-thread work and base64 inflates
+        // the payload ~33%. See docs/IMPROVEMENTS.md §1.3 for the binary/worker
+        // follow-up. Kept here to preserve the existing server/Python contract.
+        const frameData = canvas.toDataURL("image/jpeg", 0.7);
+        const timestamp = Date.now();
 
-          // Convert to base64
-          const frameData = canvas.toDataURL("image/jpeg", 0.7);
-          const frameId = Date.now();
-          const timestamp = Date.now(); // Capture timestamp for processing timing
-
-          // Send frame to MediaSoup server for processing
-          if (sfuSocketRef.current) {
-            sfuSocketRef.current.emit("video-frame", {
-              frame: frameData,
-              frameId: frameId,
-              timestamp: timestamp, // Add timestamp for delay calculations
-              roomId: roomId,
-            });
-
-            console.log("[DEBUG] Sent video frame for processing:", frameId);
-          }
+        if (sfuSocketRef.current) {
+          sfuSocketRef.current.emit("video-frame", {
+            frame: frameData,
+            frameId: timestamp,
+            timestamp, // used by the server for delivery-delay calculations
+            roomId,
+          });
         }
       } catch (error) {
         console.error("[DEBUG] Frame processing error:", error);
+      } finally {
+        inFlight = false;
       }
-    }, 50); // 4 FPS
+    };
 
-    console.log("[DEBUG] Frame processing started");
+    // Prefer requestVideoFrameCallback: it fires once per actually-rendered
+    // video frame and is integrated with the browser frame scheduler, so we
+    // sample real frames (not blank ones) and avoid a free-running timer.
+    // Throttle to TARGET_CAPTURE_FPS; fall back to a correctly-sized interval.
+    const hasRVFC =
+      typeof (tempVideo as any).requestVideoFrameCallback === "function";
+
+    if (hasRVFC) {
+      const onFrame = (now: number) => {
+        if (stopped) return;
+        if (now - lastCaptureTs >= minFrameIntervalMs) {
+          lastCaptureTs = now;
+          captureFrame();
+        }
+        (tempVideo as any).requestVideoFrameCallback(onFrame);
+      };
+      (tempVideo as any).requestVideoFrameCallback(onFrame);
+    } else {
+      frameIntervalRef.current = setInterval(captureFrame, minFrameIntervalMs);
+    }
+
+    stopFrameCaptureRef.current = () => {
+      stopped = true;
+      if (frameIntervalRef.current) {
+        clearInterval(frameIntervalRef.current);
+        frameIntervalRef.current = null;
+      }
+      tempVideo.pause();
+      tempVideo.srcObject = null;
+    };
+
+    console.log(
+      `[DEBUG] Frame processing started at ${TARGET_CAPTURE_FPS} FPS (rVFC=${hasRVFC})`
+    );
   };
 
   const startAudioProcessing = (stream: MediaStream) => {
