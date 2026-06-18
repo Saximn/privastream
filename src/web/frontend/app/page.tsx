@@ -10,9 +10,10 @@ export default function Home() {
   const router = useRouter();
   const fundraisingGoalSgd = 200;
   const raisedAmountSgd = 0;
-  const fundraisingProgress = Math.round(
-    (raisedAmountSgd / fundraisingGoalSgd) * 100,
-  );
+  const fundraisingProgress =
+    fundraisingGoalSgd > 0
+      ? Math.round((raisedAmountSgd / fundraisingGoalSgd) * 100)
+      : 0;
 
   // const createRoom = () => {
   //   router.push("/host");
