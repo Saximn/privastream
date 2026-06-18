@@ -180,25 +180,31 @@ class AudioRedactionProcessor {
         };
       } else {
         console.error('[AUDIO-REDACTION-PROCESSOR] Processing failed:', result.error);
+        // PRIVACY PROTECTION: never return the original, un-redacted chunk on
+        // failure. Return silence of the same length so audio timing is
+        // preserved while leaking nothing.
         return {
           success: false,
-          processedAudio: currentChunk, // Return current chunk as fallback
+          processedAudio: Buffer.alloc(currentChunk.length),
           metadata: {
             hadPreviousChunk: !isFirstChunk,
-            slidingWindow: !isFirstChunk
+            slidingWindow: !isFirstChunk,
+            redacted: 'silence'
           },
           error: result.error
         };
       }
-      
+
     } catch (error) {
       console.error('[AUDIO-REDACTION-PROCESSOR] Error processing audio:', error);
+      // PRIVACY PROTECTION: emit silence, never the raw chunk, on error.
       return {
         success: false,
-        processedAudio: currentChunk, // Return current chunk as fallback
+        processedAudio: Buffer.alloc(currentChunk.length),
         metadata: {
           hadPreviousChunk: !isFirstChunk,
-          slidingWindow: !isFirstChunk
+          slidingWindow: !isFirstChunk,
+          redacted: 'silence'
         },
         error: error.message
       };
