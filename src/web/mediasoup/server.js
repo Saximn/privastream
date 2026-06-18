@@ -12,6 +12,31 @@ const path = require('path');
 require('dotenv').config();
 const API_CONFIG = require('./config').default;
 
+// Security / network configuration (env-driven).
+const NODE_ENV = process.env.NODE_ENV || 'development';
+
+// CORS allowlist: comma-separated origins; defaults to the localhost frontend
+// for development. Never wildcard — any site could otherwise drive the SFU.
+const CORS_ALLOWED_ORIGINS = (process.env.CORS_ALLOWED_ORIGINS || 'http://localhost:3000')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+// Interface the SFU binds to, and the public IP advertised to WebRTC clients.
+const MEDIASOUP_LISTEN_IP = process.env.MEDIASOUP_LISTEN_IP || '0.0.0.0';
+let MEDIASOUP_ANNOUNCED_IP = process.env.MEDIASOUP_ANNOUNCED_IP;
+if (!MEDIASOUP_ANNOUNCED_IP) {
+  if (NODE_ENV === 'production') {
+    // A localhost default in production makes WebRTC unreachable for everyone
+    // but the host — fail loudly instead of silently shipping a broken SFU.
+    throw new Error(
+      'MEDIASOUP_ANNOUNCED_IP must be set in production (the public IP reachable by WebRTC clients).'
+    );
+  }
+  MEDIASOUP_ANNOUNCED_IP = '127.0.0.1';
+  console.warn('[SERVER] MEDIASOUP_ANNOUNCED_IP not set; defaulting to 127.0.0.1 (local-only).');
+}
+
 // Try to import node-fetch, fallback to http if needed
 let fetch;
 try {
@@ -79,11 +104,11 @@ const videoProcessor = new WebRTCVideoProcessor({
 
 const app = express();
 const server = http.createServer(app);
-app.use(cors());
+app.use(cors({ origin: CORS_ALLOWED_ORIGINS, methods: ["GET", "POST"] }));
 app.use(express.json());
 
 const io = new Server(server, {
-  cors: { origin: "*", methods: ["GET", "POST"] }
+  cors: { origin: CORS_ALLOWED_ORIGINS, methods: ["GET", "POST"] }
 });
 
 // Mediasoup codec config
@@ -93,7 +118,7 @@ const mediaCodecs = [
 ];
 
 const webRtcTransportOptions = {
-  listenIps: [{ ip: '0.0.0.0', announcedIp: '127.0.0.1' }],
+  listenIps: [{ ip: MEDIASOUP_LISTEN_IP, announcedIp: MEDIASOUP_ANNOUNCED_IP }],
   enableUdp: true,
   enableTcp: true,
   preferUdp: true

@@ -3,6 +3,8 @@ License plate detection model for extracting blur regions.
 Processes a single frame and returns rectangles to be blurred.
 """
 import time
+import os
+from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Any
 import numpy as np
 
@@ -27,7 +29,8 @@ class PlateDetector:
                  imgsz: int = 960,
                  conf_thresh: float = 0.25,
                  iou_thresh: float = 0.5,
-                 pad: int = 4):
+                 pad: int = 4,
+                 exported_model_path: Optional[str] = None):
         """
         Initialize the plate detector.
         
@@ -37,21 +40,52 @@ class PlateDetector:
             conf_thresh: Confidence threshold for detections
             iou_thresh: IoU threshold for NMS
             pad: Padding around detected boxes in pixels
+            exported_model_path: Optional exported ONNX/TensorRT engine path
         """
         self.weights_path = weights_path
         self.imgsz = imgsz
         self.conf_thresh = conf_thresh
         self.iou_thresh = iou_thresh
         self.pad = pad
+        self.model_path = self._resolve_model_path(weights_path, exported_model_path)
+        self.model_backend = Path(self.model_path).suffix.lower().lstrip(".") or "pytorch"
         
-        # Determine device
+        # Determine device. TensorRT engines already bind execution provider internally.
         self.device = 0 if torch.cuda.is_available() else "cpu"
+        predict_device = None if self.model_backend == "engine" else self.device
         
-        # Load YOLO model
-        self.model = YOLO(weights_path)
+        # Load YOLO model. Prefer configured/exported production artifact when present,
+        # otherwise fall back to PyTorch weights.
+        self.model = YOLO(self.model_path)
+        self.predict_device = predict_device
         
-        print(f"[PlateDetector] Initialized with device={self.device}")
+        print(f"[PlateDetector] Initialized with backend={self.model_backend}, model={self.model_path}, device={self.device}")
     
+    def _resolve_model_path(self, weights_path: str, exported_model_path: Optional[str]) -> str:
+        """Resolve production exported model if configured or colocated."""
+        candidates = [
+            exported_model_path,
+            os.getenv("PLATE_DETECTOR_ENGINE_PATH"),
+            os.getenv("PLATE_DETECTOR_ONNX_PATH"),
+            os.getenv("PLATE_DETECTOR_EXPORTED_MODEL"),
+        ]
+
+        weights = Path(weights_path)
+        if weights.suffix == ".pt":
+            candidates.extend([
+                str(weights.with_suffix(".engine")),
+                str(weights.with_suffix(".onnx")),
+            ])
+
+        for candidate in candidates:
+            if candidate and Path(candidate).exists():
+                print(f"[PlateDetector] Using exported model artifact: {candidate}")
+                return candidate
+
+        if any(candidates):
+            print("[PlateDetector] No configured exported artifact found; falling back to PyTorch weights")
+        return weights_path
+
     def clamp(self, v: float, lo: int, hi: int) -> int:
         """Clamp value between bounds."""
         return max(lo, min(hi, int(v)))
@@ -71,7 +105,7 @@ class PlateDetector:
             imgsz=self.imgsz,
             conf=self.conf_thresh,
             iou=self.iou_thresh,
-            device=self.device,
+            device=self.predict_device,
             verbose=False
         )
         
@@ -165,6 +199,8 @@ class PlateDetector:
         return {
             "model_type": "plate_detector",
             "weights_path": self.weights_path,
+            "model_path": self.model_path,
+            "model_backend": self.model_backend,
             "imgsz": self.imgsz,
             "conf_thresh": self.conf_thresh,
             "iou_thresh": self.iou_thresh,
