@@ -14,6 +14,15 @@ import time
 import threading
 from datetime import datetime
 from pathlib import Path
+import logging
+
+# Structured logging (levels, timestamps) replaces ad-hoc print() calls.
+# Tune verbosity with the LOG_LEVEL env var (default INFO).
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+logger = logging.getLogger("video_filter_api")
 
 
 def _env_bool(name, default):
@@ -32,7 +41,7 @@ def _env_int(name, default, minimum=None):
             parsed = max(minimum, parsed)
         return parsed
     except ValueError:
-        print(f"[CONFIG] Invalid integer for {name}={value!r}; using {default}")
+        logger.warning(f"[CONFIG] Invalid integer for {name}={value!r}; using {default}")
         return default
 
 def _latency_ms(start_time):
@@ -49,7 +58,7 @@ try:
     INSIGHTFACE_AVAILABLE = True
 except ImportError:
     INSIGHTFACE_AVAILABLE = False
-    print("Warning: InsightFace not available. Face enrollment disabled.")
+    logger.warning("Warning: InsightFace not available. Face enrollment disabled.")
 
 def allowed_origins():
     """CORS allowlist from CORS_ALLOWED_ORIGINS (comma-separated).
@@ -94,8 +103,8 @@ DETECTION_FPS = 30.0  # FPS for face/privacy detection (lower = less latency, hi
 DETECTION_STRIDE = max(1, int(30 / DETECTION_FPS))  # Process every Nth frame
 
 EXPECTED_DELAY_SEC = DETECTION_STRIDE / 30.0  # Delay in seconds based on 30fps input
-print(f"[CONFIG] Detection FPS: {DETECTION_FPS}, Stride: {DETECTION_STRIDE} (process every {DETECTION_STRIDE} frames)")
-print(f"[CONFIG] Expected detection delay: {EXPECTED_DELAY_SEC:.2f} seconds")
+logger.info(f"[CONFIG] Detection FPS: {DETECTION_FPS}, Stride: {DETECTION_STRIDE} (process every {DETECTION_STRIDE} frames)")
+logger.info(f"[CONFIG] Expected detection delay: {EXPECTED_DELAY_SEC:.2f} seconds")
 
 # Detector configuration
 DETECTOR_CONFIG = {
@@ -142,7 +151,7 @@ def is_request_stale(request_timestamp_ms):
     request_age_ms = current_time_ms - request_timestamp_ms
     
     if QUEUE_CONFIG["queue_monitoring"]:
-        print(f"[QUEUE] Request age: {request_age_ms}ms (max: {QUEUE_CONFIG['max_request_age_ms']}ms)")
+        logger.debug(f"[QUEUE] Request age: {request_age_ms}ms (max: {QUEUE_CONFIG['max_request_age_ms']}ms)")
     
     return request_age_ms > QUEUE_CONFIG["max_request_age_ms"]
 
@@ -151,7 +160,7 @@ def can_process_request():
     with request_lock:
         can_process = active_requests < QUEUE_CONFIG["max_concurrent_requests"]
         if QUEUE_CONFIG["queue_monitoring"]:
-            print(f"[QUEUE] Active requests: {active_requests}/{QUEUE_CONFIG['max_concurrent_requests']}, Can process: {can_process}")
+            logger.debug(f"[QUEUE] Active requests: {active_requests}/{QUEUE_CONFIG['max_concurrent_requests']}, Can process: {can_process}")
         return can_process
 
 def start_request_processing():
@@ -160,7 +169,7 @@ def start_request_processing():
     with request_lock:
         active_requests += 1
         if QUEUE_CONFIG["queue_monitoring"]:
-            print(f"[QUEUE] Started processing request, active: {active_requests}")
+            logger.debug(f"[QUEUE] Started processing request, active: {active_requests}")
 
 def finish_request_processing():
     """Mark end of request processing."""
@@ -168,7 +177,7 @@ def finish_request_processing():
     with request_lock:
         active_requests = max(0, active_requests - 1)  # Prevent negative counts
         if QUEUE_CONFIG["queue_monitoring"]:
-            print(f"[QUEUE] Finished processing request, active: {active_requests}")
+            logger.debug(f"[QUEUE] Finished processing request, active: {active_requests}")
 
 def setup_debug_directories():
     """Create debug output directories if they don't exist."""
@@ -184,9 +193,9 @@ def setup_debug_directories():
         (debug_dir / "output").mkdir(exist_ok=True)
         (debug_dir / "comparison").mkdir(exist_ok=True)
         
-        print(f"[DEBUG] Debug directories created at: {debug_dir.absolute()}")
+        logger.debug(f"[DEBUG] Debug directories created at: {debug_dir.absolute()}")
     except Exception as e:
-        print(f"[DEBUG] Failed to create debug directories: {e}")
+        logger.error(f"[DEBUG] Failed to create debug directories: {e}")
 
 def save_debug_image(image, image_type, frame_id, rectangles=None):
     """Save debug images for input/output comparison."""
@@ -228,10 +237,10 @@ def save_debug_image(image, image_type, frame_id, rectangles=None):
         # Clean up old images if we exceed max_images
         cleanup_old_debug_images(debug_dir / image_type)
         
-        print(f"[DEBUG] Saved {image_type} image: {filepath.name}")
+        logger.debug(f"[DEBUG] Saved {image_type} image: {filepath.name}")
         
     except Exception as e:
-        print(f"[DEBUG] Failed to save {image_type} image: {e}")
+        logger.error(f"[DEBUG] Failed to save {image_type} image: {e}")
 
 def cleanup_old_debug_images(directory):
     """Remove old debug images if we exceed the maximum count."""
@@ -248,10 +257,10 @@ def cleanup_old_debug_images(directory):
             for file_path in files_to_remove:
                 file_path.unlink()
                 
-            print(f"[DEBUG] Cleaned up {len(files_to_remove)} old images from {directory.name}")
+            logger.debug(f"[DEBUG] Cleaned up {len(files_to_remove)} old images from {directory.name}")
             
     except Exception as e:
-        print(f"[DEBUG] Failed to cleanup old images: {e}")
+        logger.error(f"[DEBUG] Failed to cleanup old images: {e}")
 
 def init_detector():
     """Initialize the detector once."""
@@ -259,27 +268,27 @@ def init_detector():
     if detector is None:
         try:
             detector = UnifiedBlurDetector(DETECTOR_CONFIG)
-            print("[API] Video filter detector initialized")
+            logger.info("[API] Video filter detector initialized")
             
             # Set up debug directories
             setup_debug_directories()
             
         except Exception as e:
-            print(f"[API] Failed to initialize detector: {e}")
+            logger.error(f"[API] Failed to initialize detector: {e}")
             detector = "failed"
     
     # Initialize face detection for enrollment
     if face_app is None and INSIGHTFACE_AVAILABLE:
         try:
-            print("[API] Initializing InsightFace Buffalo_S for enrollment...")
+            logger.info("[API] Initializing InsightFace Buffalo_S for enrollment...")
             face_app = FaceAnalysis(
                 name='buffalo_s',
                 providers=['CUDAExecutionProvider', 'CPUExecutionProvider']
             )
             face_app.prepare(ctx_id=0, det_size=(640, 640))
-            print("[API] ✅ InsightFace Buffalo_S initialized for enrollment")
+            logger.info("[API] ✅ InsightFace Buffalo_S initialized for enrollment")
         except Exception as e:
-            print(f"[API] ❌ Failed to initialize InsightFace: {e}")
+            logger.error(f"[API] ❌ Failed to initialize InsightFace: {e}")
             face_app = "failed"
 
 def filter_frame(frame, frame_id=0, blur_only=False, provided_rectangles=None, room_id=None, detect_only=False):
@@ -299,7 +308,7 @@ def filter_frame(frame, frame_id=0, blur_only=False, provided_rectangles=None, r
     
     if blur_only and provided_rectangles:
         # CPU-only blur mode: use provided rectangles, no GPU detection
-        print(f"[API] CPU blur mode: applying blur to {len(provided_rectangles)} regions")
+        logger.info(f"[API] CPU blur mode: applying blur to {len(provided_rectangles)} regions")
         rectangles = provided_rectangles
         
         # Save input image with provided rectangles for comparison
@@ -312,15 +321,15 @@ def filter_frame(frame, frame_id=0, blur_only=False, provided_rectangles=None, r
             raise RuntimeError("Detector initialization failed")
         
         # Update face detector embedding if room has enrolled face
-        print(f"[API] DEBUG: Checking room_id='{room_id}', available rooms: {list(room_embeddings.keys())}")
+        logger.info(f"[API] DEBUG: Checking room_id='{room_id}', available rooms: {list(room_embeddings.keys())}")
         if room_id and room_id in room_embeddings:
-            print(f"[API] ✅ Updating face embedding for room {room_id}")
+            logger.info(f"[API] ✅ Updating face embedding for room {room_id}")
             embedding = room_embeddings[room_id]['embedding']  # Extract just the numpy array
             detector.update_face_embedding(embedding)
         else:
-            print(f"[API] ⚠️  No embedding found for room {room_id} (available: {list(room_embeddings.keys())})")
+            logger.warning(f"[API] ⚠️  No embedding found for room {room_id} (available: {list(room_embeddings.keys())})")
         
-        print(f"[API] Full detection mode: processing frame {frame_id}")
+        logger.info(f"[API] Full detection mode: processing frame {frame_id}")
         detect_start = time.perf_counter()
         results = detector.process_frame(frame, frame_id, stride=DETECTION_STRIDE, room_id=room_id)
         timings["detect_ms"] = _latency_ms(detect_start)
@@ -331,7 +340,7 @@ def filter_frame(frame, frame_id=0, blur_only=False, provided_rectangles=None, r
             if "rectangles" in model_data:
                 rectangles.extend(model_data["rectangles"])
         
-        print(f"[API] Detected {len(rectangles)} regions")
+        logger.info(f"[API] Detected {len(rectangles)} regions")
         
         # Save input image with detection boxes for comparison
         save_debug_image(input_frame_copy, "input", frame_id, rectangles)
@@ -339,7 +348,7 @@ def filter_frame(frame, frame_id=0, blur_only=False, provided_rectangles=None, r
     if detect_only:
         timings["total_ms"] = _latency_ms(total_start)
         compact_rectangles = [[int(v) for v in rect[:4]] for rect in rectangles if len(rect) >= 4]
-        print(f"[API] Detect-only mode: returning {len(compact_rectangles)} compact boxes without blur/encode")
+        logger.info(f"[API] Detect-only mode: returning {len(compact_rectangles)} compact boxes without blur/encode")
         return None, compact_rectangles, timings
 
     # Apply Gaussian blur to all rectangles (CPU processing)
@@ -363,10 +372,10 @@ def filter_frame(frame, frame_id=0, blur_only=False, provided_rectangles=None, r
                         frame[y:y+h, x:x+w] = cv2.blur(roi, (75, 75))
                         blur_applied += 1
         except Exception as e:
-            print(f"[API] Error blurring rectangle {rect}: {e}")
+            logger.error(f"[API] Error blurring rectangle {rect}: {e}")
     
     timings["blur_ms"] = _latency_ms(blur_start)
-    print(f"[API] Applied blur to {blur_applied}/{len(rectangles)} regions")
+    logger.info(f"[API] Applied blur to {blur_applied}/{len(rectangles)} regions")
     
     # Save debug output image (after blur processing)
     save_debug_image(frame, "output", frame_id, rectangles)
@@ -402,11 +411,11 @@ def process_frame_route():
         room_id = data.get('room_id', None)  # Get room_id for whitelist lookup
         
         if room_id:
-            print(f"[API] Processing frame {frame_id} for room {room_id}")
+            logger.info(f"[API] Processing frame {frame_id} for room {room_id}")
         
         # 1. Check if request is too old
         if is_request_stale(request_timestamp):
-            print(f"[QUEUE] 🗑️ DROPPING STALE REQUEST - Frame {frame_id} is too old to process")
+            logger.debug(f"[QUEUE] 🗑️ DROPPING STALE REQUEST - Frame {frame_id} is too old to process")
             return jsonify({
                 "success": False,
                 "error": "Request too old",
@@ -417,7 +426,7 @@ def process_frame_route():
         
         # 2. Check concurrent request limit
         if not can_process_request():
-            print(f"[QUEUE] 🚫 DROPPING REQUEST - Too many concurrent requests, Frame {frame_id}")
+            logger.debug(f"[QUEUE] 🚫 DROPPING REQUEST - Too many concurrent requests, Frame {frame_id}")
             return jsonify({
                 "success": False,
                 "error": "Server overloaded",
@@ -449,11 +458,11 @@ def process_frame_route():
             
             # Log processing mode
             if blur_only:
-                print(f"[API] Processing frame {frame_id} in BLUR_ONLY mode with {len(provided_rectangles)} rectangles")
+                logger.info(f"[API] Processing frame {frame_id} in BLUR_ONLY mode with {len(provided_rectangles)} rectangles")
             elif detect_only:
-                print(f"[API] Processing frame {frame_id} in DETECT_ONLY mode (full detection)")
+                logger.info(f"[API] Processing frame {frame_id} in DETECT_ONLY mode (full detection)")
             else:
-                print(f"[API] Processing frame {frame_id} in FULL mode")
+                logger.info(f"[API] Processing frame {frame_id} in FULL mode")
             
             processed_frame_b64, rectangles, timings = filter_frame(
                 frame, 
@@ -491,8 +500,9 @@ def process_frame_route():
             except:
                 pass  # Ignore errors in cleanup
         
-        print(f"[API] Frame processing error: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"[API] Frame processing error: {e}")
+        logger.exception("Unhandled error during request")
+        return jsonify({"error": "Internal server error"}), 500
 
 @app.route('/detector-info')
 def detector_info():
@@ -504,7 +514,8 @@ def detector_info():
     try:
         return jsonify(detector.get_model_info())
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.exception("Unhandled error during request")
+        return jsonify({"error": "Internal server error"}), 500
 
 @app.route('/debug-status')
 def debug_status():
@@ -532,7 +543,8 @@ def debug_status():
         
         return jsonify(status)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.exception("Unhandled error during request")
+        return jsonify({"error": "Internal server error"}), 500
 
 @app.route('/debug-config', methods=['POST'])
 def update_debug_config():
@@ -563,7 +575,8 @@ def update_debug_config():
             "config": DEBUG_CONFIG
         })
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.exception("Unhandled error during request")
+        return jsonify({"error": "Internal server error"}), 500
 
 @app.route('/debug-cleanup', methods=['POST'])
 def cleanup_debug_images_endpoint():
@@ -590,7 +603,8 @@ def cleanup_debug_images_endpoint():
             "message": f"Removed {total_removed} debug images"
         })
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.exception("Unhandled error during request")
+        return jsonify({"error": "Internal server error"}), 500
 
 @app.route('/queue-status')
 def queue_status():
@@ -652,7 +666,8 @@ def update_queue_config():
             "config": QUEUE_CONFIG
         })
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.exception("Unhandled error during request")
+        return jsonify({"error": "Internal server error"}), 500
 
 # Face Enrollment Endpoints
 @app.route('/face-detection', methods=['POST'])
@@ -684,7 +699,7 @@ def face_detection():
         frame_data = data['frame_data']
         room_id = data.get('room_id', 'unknown')
         
-        print(f"[ENROLLMENT] DEBUG - Received request with room_id: '{room_id}'")
+        logger.info(f"[ENROLLMENT] DEBUG - Received request with room_id: '{room_id}'")
         
         # Decode base64 image
         try:
@@ -700,9 +715,10 @@ def face_detection():
                 }), 400
                 
         except Exception as e:
+            logger.exception("Image decode error")
             return jsonify({
                 'success': False,
-                'error': f'Image decode error: {str(e)}',
+                'error': 'Failed to decode image',
                 'faces_detected': []
             }), 400
         
@@ -724,9 +740,9 @@ def face_detection():
                 'confidence': confidence
             })
             
-            print(f"[ENROLLMENT] Detected {len(faces)} faces, showing largest one in {detection_time:.3f}s for room {room_id}")
+            logger.info(f"[ENROLLMENT] Detected {len(faces)} faces, showing largest one in {detection_time:.3f}s for room {room_id}")
         else:
-            print(f"[ENROLLMENT] No faces detected in {detection_time:.3f}s for room {room_id}")
+            logger.info(f"[ENROLLMENT] No faces detected in {detection_time:.3f}s for room {room_id}")
         
         return jsonify({
             'success': True,
@@ -736,10 +752,10 @@ def face_detection():
         })
         
     except Exception as e:
-        print(f"[ENROLLMENT] Face detection error: {e}")
+        logger.exception("[ENROLLMENT] Face detection error")
         return jsonify({
             'success': False,
-            'error': f'Detection failed: {str(e)}',
+            'error': 'Face detection failed',
             'faces_detected': []
         }), 500
 
@@ -779,8 +795,8 @@ def face_enrollment():
                 'enrollment_complete': False
             }), 400
         
-        print(f"[ENROLLMENT] Starting face enrollment for room: {room_id}")
-        print(f"[ENROLLMENT] Processing {len(frames)} frames")
+        logger.info(f"[ENROLLMENT] Starting face enrollment for room: {room_id}")
+        logger.info(f"[ENROLLMENT] Processing {len(frames)} frames")
         
         all_embeddings = []
         valid_frames = 0
@@ -793,7 +809,7 @@ def face_enrollment():
                 image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                 
                 if image is None:
-                    print(f"[ENROLLMENT] Failed to decode frame {i}")
+                    logger.error(f"[ENROLLMENT] Failed to decode frame {i}")
                     continue
                 
                 # Extract embeddings from this frame - SELECT MAX SIZE FACE ONLY
@@ -810,14 +826,14 @@ def face_enrollment():
                         
                         # Calculate face area for logging
                         face_area = (max_face.bbox[2]-max_face.bbox[0])*(max_face.bbox[3]-max_face.bbox[1])
-                        print(f"[ENROLLMENT] Frame {i}: extracted largest face embedding (area: {face_area:.0f}px, {len(faces)} total faces)")
+                        logger.info(f"[ENROLLMENT] Frame {i}: extracted largest face embedding (area: {face_area:.0f}px, {len(faces)} total faces)")
                     else:
-                        print(f"[ENROLLMENT] Frame {i}: no valid embedding from largest face")
+                        logger.info(f"[ENROLLMENT] Frame {i}: no valid embedding from largest face")
                 else:
-                    print(f"[ENROLLMENT] Frame {i}: no faces detected")
+                    logger.info(f"[ENROLLMENT] Frame {i}: no faces detected")
                     
             except Exception as e:
-                print(f"[ENROLLMENT] Error processing frame {i}: {e}")
+                logger.error(f"[ENROLLMENT] Error processing frame {i}: {e}")
                 continue
         
         if not all_embeddings:
@@ -847,9 +863,9 @@ def face_enrollment():
             }
         }
         
-        print(f"[ENROLLMENT] ✅ Face enrollment complete for room {room_id}")
-        print(f"[ENROLLMENT]    Processed: {valid_frames}/{len(frames)} frames")
-        print(f"[ENROLLMENT]    Embeddings: {len(all_embeddings)} -> 1 average")
+        logger.info(f"[ENROLLMENT] ✅ Face enrollment complete for room {room_id}")
+        logger.info(f"[ENROLLMENT]    Processed: {valid_frames}/{len(frames)} frames")
+        logger.info(f"[ENROLLMENT]    Embeddings: {len(all_embeddings)} -> 1 average")
         
         return jsonify({
             'success': True,
@@ -859,10 +875,10 @@ def face_enrollment():
         })
         
     except Exception as e:
-        print(f"[ENROLLMENT] Face enrollment error: {e}")
+        logger.exception("[ENROLLMENT] Face enrollment error")
         return jsonify({
             'success': False,
-            'message': f'Enrollment failed: {str(e)}',
+            'message': 'Enrollment failed',
             'enrollment_complete': False
         }), 500
 
@@ -884,8 +900,9 @@ def get_room_status(room_id: str):
             })
             
     except Exception as e:
+        logger.exception("Room status check failed")
         return jsonify({
-            'error': f'Status check failed: {str(e)}'
+            'error': 'Status check failed'
         }), 500
 
 @app.route('/cleanup-room/<room_id>', methods=['DELETE'])
@@ -894,7 +911,7 @@ def cleanup_room(room_id: str):
     try:
         if room_id in room_embeddings:
             del room_embeddings[room_id]
-            print(f"[ENROLLMENT] Cleaned up enrollment data for room: {room_id}")
+            logger.info(f"[ENROLLMENT] Cleaned up enrollment data for room: {room_id}")
         
         return jsonify({
             'success': True,
@@ -902,9 +919,10 @@ def cleanup_room(room_id: str):
         })
         
     except Exception as e:
+        logger.exception("Room cleanup failed")
         return jsonify({
             'success': False,
-            'error': f'Cleanup failed: {str(e)}'
+            'error': 'Cleanup failed'
         }), 500
 
 @app.route('/detect-faces-mouths', methods=['POST'])
@@ -926,11 +944,11 @@ def detect_faces_and_mouths():
         request_timestamp = data.get('timestamp', int(time.time() * 1000))
         
         if room_id:
-            print(f"[API] Processing frame {frame_id} for room {room_id}")
+            logger.info(f"[API] Processing frame {frame_id} for room {room_id}")
         
         # 1. Check if request is too old
         if is_request_stale(request_timestamp):
-            print(f"[QUEUE] 🗑️ DROPPING STALE REQUEST - Frame {frame_id} is too old to process")
+            logger.debug(f"[QUEUE] 🗑️ DROPPING STALE REQUEST - Frame {frame_id} is too old to process")
             return jsonify({
                 "success": False,
                 "error": "Request too old",
@@ -941,7 +959,7 @@ def detect_faces_and_mouths():
         
         # 2. Check concurrent request limit
         if not can_process_request():
-            print(f"[QUEUE] 🚫 DROPPING REQUEST - Too many concurrent requests, Frame {frame_id}")
+            logger.debug(f"[QUEUE] 🚫 DROPPING REQUEST - Too many concurrent requests, Frame {frame_id}")
             return jsonify({
                 "success": False,
                 "error": "Server overloaded",
@@ -976,16 +994,16 @@ def detect_faces_and_mouths():
                 return jsonify({"error": "Detector not available"}), 500
             
             # Update face detector embedding if room has enrolled face
-            print(f"[API] DEBUG: Checking room_id='{room_id}', available rooms: {list(room_embeddings.keys())}")
+            logger.info(f"[API] DEBUG: Checking room_id='{room_id}', available rooms: {list(room_embeddings.keys())}")
             if room_id and room_id in room_embeddings:
-                print(f"[API] ✅ Updating face embedding for room {room_id}")
+                logger.info(f"[API] ✅ Updating face embedding for room {room_id}")
                 embedding = room_embeddings[room_id]['embedding']  # Extract just the numpy array
                 detector.update_face_embedding(embedding)
             else:
-                print(f"[API] ⚠️ No embedding found for room {room_id} (available: {list(room_embeddings.keys())})")
+                logger.warning(f"[API] ⚠️ No embedding found for room {room_id} (available: {list(room_embeddings.keys())})")
                 
             # Log processing mode
-            print(f"[API] Processing frame {frame_id} in FAST_DETECTION mode (face+mouth+PII+plate)")
+            logger.info(f"[API] Processing frame {frame_id} in FAST_DETECTION mode (face+mouth+PII+plate)")
                 
             # STAGE 1: Get face blur regions and mouth landmarks
             start_time = time.time()
@@ -1003,12 +1021,12 @@ def detect_faces_and_mouths():
             pii_data = full_results.get("models", {}).get("pii", {})
             if "rectangles" in pii_data:
                 pii_regions = pii_data["rectangles"]
-                print(f"[API] 🔍 PII detection found {len(pii_regions)} regions")
+                logger.info(f"[API] 🔍 PII detection found {len(pii_regions)} regions")
             
             plate_data = full_results.get("models", {}).get("plate", {})
             if "rectangles" in plate_data:
                 plate_regions = plate_data["rectangles"]
-                print(f"[API] 🔍 Plate detection found {len(plate_regions)} regions")
+                logger.info(f"[API] 🔍 Plate detection found {len(plate_regions)} regions")
                 
             detection_time = time.time() - start_time
             timings["detect_ms"] = round(detection_time * 1000, 2)
@@ -1043,8 +1061,9 @@ def detect_faces_and_mouths():
             except:
                 pass  # Ignore errors in cleanup
         
-        print(f"[API] Fast detection error: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"[API] Fast detection error: {e}")
+        logger.exception("Unhandled error during request")
+        return jsonify({"error": "Internal server error"}), 500
 
 @app.route('/apply-conditional-blur', methods=['POST'])
 @require_room_token
@@ -1090,19 +1109,19 @@ def apply_conditional_blur():
         for region in pii_regions:
             apply_gaussian_blur_region(frame, region)
             pii_blurred += 1
-        print(f"[API] 🔒 Applied PII blur to {pii_blurred} regions")
+        logger.info(f"[API] 🔒 Applied PII blur to {pii_blurred} regions")
         
         # Apply plate blurring (always - privacy protection)
         plates_blurred = 0
         for region in plate_regions:
             apply_gaussian_blur_region(frame, region)
             plates_blurred += 1
-        print(f"[API] 🚗 Applied plate blur to {plates_blurred} regions")
+        logger.info(f"[API] 🚗 Applied plate blur to {plates_blurred} regions")
         
         # Apply mouth blurring (conditional - PII protection)
         mouths_blurred = 0
         if blur_mouths and mouth_regions:
-            print(f"[API] 👄 Applying mouth blur to {len(mouth_regions)} mouths due to PII: {pii_reason}")
+            logger.info(f"[API] 👄 Applying mouth blur to {len(mouth_regions)} mouths due to PII: {pii_reason}")
             for mouth_data in mouth_regions:
                 try:
                     mouth_bbox = mouth_data['bbox']
@@ -1114,8 +1133,8 @@ def apply_conditional_blur():
                         apply_strong_mouth_blur(frame, mouth_bbox)
                     mouths_blurred += 1
                 except Exception as e:
-                    print(f"[API] Error processing mouth {mouths_blurred}: {e}")
-                    print(f"[API] Mouth data: {mouth_data}")
+                    logger.error(f"[API] Error processing mouth {mouths_blurred}: {e}")
+                    logger.info(f"[API] Mouth data: {mouth_data}")
                 
         timings["blur_ms"] = _latency_ms(blur_start)
         # Encode result
@@ -1123,7 +1142,7 @@ def apply_conditional_blur():
             encode_start = time.perf_counter()
             encode_result = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
             if len(encode_result) != 2:
-                print(f"[API] Warning: cv2.imencode returned {len(encode_result)} values instead of 2")
+                logger.warning(f"[API] Warning: cv2.imencode returned {len(encode_result)} values instead of 2")
                 return jsonify({"error": "Image encoding failed"}), 500
             
             success, buffer = encode_result
@@ -1133,7 +1152,7 @@ def apply_conditional_blur():
             frame_b64 = base64.b64encode(buffer).decode('utf-8')
             timings["encode_ms"] = _latency_ms(encode_start)
         except Exception as e:
-            print(f"[API] Image encoding error: {e}")
+            logger.error(f"[API] Image encoding error: {e}")
             return jsonify({"error": "Image encoding failed"}), 500
         frame_b64 = f"data:image/jpeg;base64,{frame_b64}"
         timings["total_ms"] = _latency_ms(total_start)
@@ -1151,8 +1170,9 @@ def apply_conditional_blur():
         })
         
     except Exception as e:
-        print(f"[API] Conditional blur error: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"[API] Conditional blur error: {e}")
+        logger.exception("Unhandled error during request")
+        return jsonify({"error": "Internal server error"}), 500
 
 def apply_gaussian_blur_region(frame, region):
     """Apply Gaussian blur to a specific region"""
@@ -1172,7 +1192,7 @@ def apply_landmark_mouth_blur(frame, mouth_landmarks):
     """Apply rectangular blur using mouth landmarks to determine bounds"""
     try:
         if not mouth_landmarks or len(mouth_landmarks) == 0:
-            print("[API] No mouth landmarks provided")
+            logger.info("[API] No mouth landmarks provided")
             return
             
         # Convert landmarks to numpy array and ensure proper shape
@@ -1198,11 +1218,11 @@ def apply_landmark_mouth_blur(frame, mouth_landmarks):
         # Apply rectangular blur to mouth region
         apply_strong_mouth_blur(frame, [x_min, y_min, x_max, y_max])
         
-        print(f"[API] ✅ Applied landmark-based mouth blur: bbox=[{x_min}, {y_min}, {x_max}, {y_max}]")
+        logger.info(f"[API] ✅ Applied landmark-based mouth blur: bbox=[{x_min}, {y_min}, {x_max}, {y_max}]")
         
     except Exception as e:
-        print(f"[API] Error in landmark mouth blur: {e}")
-        print(f"[API] Landmark data type: {type(mouth_landmarks)}, length: {len(mouth_landmarks) if mouth_landmarks else 0}")
+        logger.error(f"[API] Error in landmark mouth blur: {e}")
+        logger.info(f"[API] Landmark data type: {type(mouth_landmarks)}, length: {len(mouth_landmarks) if mouth_landmarks else 0}")
         # No additional fallback needed - error will be logged
 
 def apply_strong_mouth_blur(frame, mouth_bbox):
@@ -1234,7 +1254,7 @@ def cleanup_room_endpoint(room_id: str):
         # Clean up embeddings
         if room_id in room_embeddings:
             del room_embeddings[room_id]
-            print(f"[API] Cleaned up embedding for room: {room_id}")
+            logger.info(f"[API] Cleaned up embedding for room: {room_id}")
             
         return jsonify({
             "success": True,
@@ -1242,8 +1262,9 @@ def cleanup_room_endpoint(room_id: str):
         })
         
     except Exception as e:
-        print(f"[API] ❌ Room cleanup error: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"[API] ❌ Room cleanup error: {e}")
+        logger.exception("Unhandled error during request")
+        return jsonify({"error": "Internal server error"}), 500
 
 @app.route('/transfer-embedding', methods=['POST'])
 def transfer_embedding():
@@ -1263,8 +1284,8 @@ def transfer_embedding():
         
         # Copy embedding to new room
         room_embeddings[to_room_id] = room_embeddings[from_room_id].copy()
-        print(f"[API] 🔄 Transferred embedding from room {from_room_id} to room {to_room_id}")
-        print(f"[API] 🔄 Available rooms after transfer: {list(room_embeddings.keys())}")
+        logger.info(f"[API] 🔄 Transferred embedding from room {from_room_id} to room {to_room_id}")
+        logger.info(f"[API] 🔄 Available rooms after transfer: {list(room_embeddings.keys())}")
         
         return jsonify({
             "success": True,
@@ -1272,22 +1293,29 @@ def transfer_embedding():
         })
         
     except Exception as e:
-        print(f"[API] ❌ Transfer embedding error: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"[API] ❌ Transfer embedding error: {e}")
+        logger.exception("Unhandled error during request")
+        return jsonify({"error": "Internal server error"}), 500
 
 if __name__ == '__main__':
-    print("Starting Video Filter API...")
-    print(f"Detector config:\n{json.dumps(DETECTOR_CONFIG, indent=2)}")
-    print(f"Debug config:\n{json.dumps(DEBUG_CONFIG, indent=2)}")
-    print(f"Queue config:\n{json.dumps(QUEUE_CONFIG, indent=2)}")
-    print("\n🛡️ QUEUE PROTECTION FEATURES:")
-    print(f"   • Drop requests older than {QUEUE_CONFIG['max_request_age_ms']}ms")
-    print(f"   • Max concurrent requests: {QUEUE_CONFIG['max_concurrent_requests']}")
-    print(f"   • Request dropping: {'ENABLED' if QUEUE_CONFIG['enable_request_dropping'] else 'DISABLED'}")
-    print(f"   • Queue monitoring: {'ENABLED' if QUEUE_CONFIG['queue_monitoring'] else 'DISABLED'}")
+    logger.info("Starting Video Filter API...")
+    logger.info(f"Detector config:\n{json.dumps(DETECTOR_CONFIG, indent=2)}")
+    logger.info(f"Debug config:\n{json.dumps(DEBUG_CONFIG, indent=2)}")
+    logger.info(f"Queue config:\n{json.dumps(QUEUE_CONFIG, indent=2)}")
+    logger.info("\n🛡️ QUEUE PROTECTION FEATURES:")
+    logger.info(f"   • Drop requests older than {QUEUE_CONFIG['max_request_age_ms']}ms")
+    logger.info(f"   • Max concurrent requests: {QUEUE_CONFIG['max_concurrent_requests']}")
+    logger.info(f"   • Request dropping: {'ENABLED' if QUEUE_CONFIG['enable_request_dropping'] else 'DISABLED'}")
+    logger.info(f"   • Queue monitoring: {'ENABLED' if QUEUE_CONFIG['queue_monitoring'] else 'DISABLED'}")
     
     # Initialize debug directories on startup
     setup_debug_directories()
     init_detector()
-    
+
+    # NOTE: app.run() is Flask's development server and should not be used in
+    # production. Run under a real WSGI server instead, e.g.:
+    #   gunicorn --workers 1 --threads 8 --timeout 120 \
+    #            --bind 0.0.0.0:5001 video_filter_api:app
+    # A single worker keeps one GPU model resident; threads handle concurrency.
+    # Routes initialise the detector lazily, so gunicorn needs no extra hook.
     app.run(host='0.0.0.0', port=5001, debug=False, threaded=True)
