@@ -84,23 +84,13 @@ console.log(API_CONFIG);
 
 // Import Audio Redaction Processor
 const { AudioRedactionProcessor } = require('./audio-redaction-processor');
-// Import WebRTC Video Processor
-const { WebRTCVideoProcessor } = require('./webrtc-video-processor');
 
-// Initialize Audio Redaction Processor  
+// Initialize Audio Redaction Processor
 const audioRedactionProcessor = new AudioRedactionProcessor({
   redactionServiceUrl: API_CONFIG.AUDIO_API_URL,
   sampleRate: 16000,  // Match Vosk requirements
   channels: 1,        // Mono for better transcription
   bufferDurationMs: 3000
-});
-
-// Initialize WebRTC Video Processor
-const videoProcessor = new WebRTCVideoProcessor({
-  videoServiceUrl: `${API_CONFIG.VIDEO_API_URL}`,
-  frameRate: 30,
-  processEveryNthFrame: 15,
-  bufferDurationMs: 3000  // Match audio processing timing
 });
 
 const app = express();
@@ -182,9 +172,6 @@ const frameAudioMapping = new Map();  // roomId -> {pendingFrames: [frameId], au
 
 // Frame buffer for video filters
 const frameBuffer = new Map(); // roomId -> [{frame, timestamp}]
-
-// Audio chunk timing tracking for sync
-const audioChunkStartTimes = new Map(); // roomId -> [startTime1, startTime2, ...]
 
 // Jitter buffer for delayed audio delivery. Replaces a per-chunk setTimeout
 // (one live timer per audio chunk, each pinning a payload on the heap) with a
@@ -486,9 +473,6 @@ io.on('connection', socket => {
     };
     rooms.set(roomId, room);
     socket.join(roomId);
-    
-    // Initialize audio chunk timing tracking
-    audioChunkStartTimes.set(roomId, []);
     
     // Set up audio processing for this room (since audio is handled via socket events, not WebRTC producers)
     console.log('[AUDIO-SERVER] 🎤 Setting up audio redaction for room:', roomId);
@@ -969,9 +953,6 @@ io.on('connection', socket => {
         } catch (error) {
           console.error('[SERVER] Error calling video cleanup:', error);
         }
-        
-        // Clean up audio timing tracking
-        audioChunkStartTimes.delete(roomId);
         
         rooms.delete(roomId);
       } else if (room.viewers.has(socket.id)) {
