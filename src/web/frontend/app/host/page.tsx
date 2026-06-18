@@ -5,6 +5,39 @@ import { SocketManager } from "@/lib/socket";
 import { MediasoupClient } from "@/lib/mediasoup-client";
 import { io, Socket } from "socket.io-client";
 import API_CONFIG from "@/lib/config";
+import {
+  VideoBlurPipeline,
+  insertableStreamsSupported,
+  type BlurBox,
+} from "@/lib/video-blur-pipeline";
+
+// Normalise the Python detector's region arrays into [x, y, w, h] blur boxes.
+// NOTE: the detector's exact box format is assumed here (x1,y1,x2,y2 when the
+// last two values exceed the first two, else x,y,w,h). Verify against the live
+// /detect-faces-mouths response and adjust if needed.
+function toBlurBoxes(result: any): BlurBox[] {
+  const groups = [
+    result?.face_blur_regions,
+    result?.mouth_regions,
+    result?.pii_regions,
+    result?.plate_regions,
+  ];
+  const out: BlurBox[] = [];
+  for (const group of groups) {
+    if (!Array.isArray(group)) continue;
+    for (const r of group) {
+      if (Array.isArray(r) && r.length >= 4) {
+        const [a, b, c, d] = r;
+        const looksLikeCorners = c > a && d > b;
+        out.push([a, b, looksLikeCorners ? c - a : c, looksLikeCorners ? d - b : d]);
+      } else if (r && typeof r === "object") {
+        if ("w" in r && "h" in r) out.push([r.x, r.y, r.w, r.h]);
+        else if ("x2" in r) out.push([r.x1, r.y1, r.x2 - r.x1, r.y2 - r.y1]);
+      }
+    }
+  }
+  return out;
+}
 
 export default function Host() {
   const [roomId, setRoomId] = useState("");
@@ -28,6 +61,7 @@ export default function Host() {
   const frameIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const blurPipelineRef = useRef<VideoBlurPipeline | null>(null);
 
   useEffect(() => {
     const initializeConnections = async () => {
@@ -190,6 +224,8 @@ export default function Host() {
       if (audioContextRef.current) {
         audioContextRef.current.close();
       }
+      blurPipelineRef.current?.stop();
+      blurPipelineRef.current = null;
       localStreamRef.current?.getTracks().forEach((track) => track.stop());
       mediasoupClientRef.current?.stopProducing();
       socketRef.current?.disconnect();
@@ -243,9 +279,30 @@ export default function Host() {
         "[DEBUG] Producing stream with video filter:",
         isVideoFilterEnabled
       );
-      await mediasoupClientRef.current.produce(stream, isVideoFilterEnabled);
 
-      // Start frame processing for video filter
+      // With the video filter on, blur faces/PII locally (Insertable Streams)
+      // and produce the ALREADY-PRIVATE track to the SFU; viewers consume it
+      // directly (no JPEG-over-socket). Refuse to stream if the browser can't
+      // blur locally, rather than leaking un-redacted video.
+      let videoTrackToProduce: MediaStreamTrack | undefined;
+      if (isVideoFilterEnabled) {
+        if (!insertableStreamsSupported()) {
+          throw new Error(
+            "This browser can't blur video locally (needs a Chromium-based browser). Refusing to stream un-redacted video."
+          );
+        }
+        const pipeline = new VideoBlurPipeline();
+        blurPipelineRef.current = pipeline;
+        videoTrackToProduce = pipeline.start(stream.getVideoTracks()[0]);
+      }
+
+      await mediasoupClientRef.current.produce(
+        stream,
+        isVideoFilterEnabled,
+        videoTrackToProduce
+      );
+
+      // Drive detection: fetch coordinates from Python and feed the pipeline.
       if (isVideoFilterEnabled) {
         startFrameProcessing(stream);
       }
@@ -274,6 +331,10 @@ export default function Host() {
         frameIntervalRef.current = null;
       }
 
+      // Stop the client-side blur pipeline
+      blurPipelineRef.current?.stop();
+      blurPipelineRef.current = null;
+
       // Stop audio processing
       if (audioProcessorRef.current) {
         audioProcessorRef.current.disconnect();
@@ -300,58 +361,64 @@ export default function Host() {
     }
   };
 
+  // Detection loop for Option B: sample frames at a low rate, ask Python for
+  // detection COORDINATES only (no server-side blur, no JPEG re-broadcast), and
+  // feed them to the local blur pipeline. Pixels never leave as base64.
   const startFrameProcessing = (stream: MediaStream) => {
-    console.log("[DEBUG] Starting frame processing for video filter");
+    console.log("[DEBUG] Starting detection loop for client-side blur");
 
-    // Create canvas for frame extraction
+    const pipeline = blurPipelineRef.current;
+    if (!pipeline) return;
+
     if (!canvasRef.current) {
       canvasRef.current = document.createElement("canvas");
     }
-
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d")!;
 
-    // Create a video element for frame extraction
     const tempVideo = document.createElement("video");
     tempVideo.srcObject = stream;
     tempVideo.muted = true;
     tempVideo.playsInline = true;
     tempVideo.play();
 
-    // Process frames at 4 FPS (every 250ms)
-    frameIntervalRef.current = setInterval(() => {
+    const DETECTION_FPS = 4;
+    let inFlight = false; // skip a tick if Python hasn't responded yet
+
+    frameIntervalRef.current = setInterval(async () => {
+      if (inFlight) return;
+      if (tempVideo.videoWidth === 0 || tempVideo.videoHeight === 0) return;
+      inFlight = true;
       try {
-        if (tempVideo.videoWidth > 0 && tempVideo.videoHeight > 0) {
-          // Set canvas size to match video
-          canvas.width = tempVideo.videoWidth;
-          canvas.height = tempVideo.videoHeight;
+        canvas.width = tempVideo.videoWidth;
+        canvas.height = tempVideo.videoHeight;
+        ctx.drawImage(tempVideo, 0, 0);
+        const frameData = canvas.toDataURL("image/jpeg", 0.6);
 
-          // Draw current video frame to canvas
-          ctx.drawImage(tempVideo, 0, 0);
-
-          // Convert to base64
-          const frameData = canvas.toDataURL("image/jpeg", 0.7);
-          const frameId = Date.now();
-          const timestamp = Date.now(); // Capture timestamp for processing timing
-
-          // Send frame to MediaSoup server for processing
-          if (sfuSocketRef.current) {
-            sfuSocketRef.current.emit("video-frame", {
+        // /detect-faces-mouths already returns coordinates as JSON (no blur).
+        const res = await fetch(
+          `${API_CONFIG.VIDEO_API_URL}detect-faces-mouths`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
               frame: frameData,
-              frameId: frameId,
-              timestamp: timestamp, // Add timestamp for delay calculations
-              roomId: roomId,
-            });
-
-            console.log("[DEBUG] Sent video frame for processing:", frameId);
+              frame_id: Date.now(),
+              room_id: roomId,
+            }),
           }
+        );
+        if (res.ok) {
+          pipeline.setBoxes(toBlurBoxes(await res.json()));
         }
       } catch (error) {
-        console.error("[DEBUG] Frame processing error:", error);
+        console.error("[DEBUG] Detection loop error:", error);
+      } finally {
+        inFlight = false;
       }
-    }, 50); // 4 FPS
+    }, 1000 / DETECTION_FPS);
 
-    console.log("[DEBUG] Frame processing started");
+    console.log("[DEBUG] Detection loop started at", DETECTION_FPS, "FPS");
   };
 
   const startAudioProcessing = (stream: MediaStream) => {
