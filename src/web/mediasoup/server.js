@@ -849,13 +849,14 @@ io.on('connection', socket => {
     // Video is handled via processed-video-frame socket events
     // Audio is handled via processed-audio socket events
     const producers = Array.from(room.hostProducers.entries()).map(([kind, producer]) => {
-      // Skip video producers - video handled via socket events
+      // Video is now blurred on the host (client-side Insertable Streams) before
+      // it reaches the SFU, so viewers consume the WebRTC video track directly.
       if (kind === 'video') {
-        console.log('[VIDEO-SERVER] ❌ Skipping video producer - using processed frames via socket events');
-        return null;
+        console.log('[VIDEO-SERVER] ✅ Exposing blurred video producer for consumption');
+        return { id: producer.id, kind: kind };
       }
-      
-      // Skip audio producers - audio handled via socket events  
+
+      // Skip audio producers - audio handled via socket events
       if (kind === 'audio') {
         console.log('[VIDEO-SERVER] ❌ Skipping audio producer - using processed audio via socket events');
         return null;
