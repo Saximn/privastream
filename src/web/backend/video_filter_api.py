@@ -51,8 +51,18 @@ except ImportError:
     INSIGHTFACE_AVAILABLE = False
     print("Warning: InsightFace not available. Face enrollment disabled.")
 
+def allowed_origins():
+    """CORS allowlist from CORS_ALLOWED_ORIGINS (comma-separated).
+
+    Defaults to the localhost frontend for development. Never wildcard — these
+    endpoints drive GPU detection/blur and must not be callable from any site.
+    """
+    raw = os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:3000')
+    return [o.strip() for o in raw.split(',') if o.strip()]
+
+
 app = Flask(__name__)
-CORS(app, origins="*")
+CORS(app, origins=allowed_origins())
 
 # PERFORMANCE CONFIGURATION - Easy to adjust
 DETECTION_FPS = 30.0  # FPS for face/privacy detection (lower = less latency, higher = more CPU load)

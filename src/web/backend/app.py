@@ -4,6 +4,7 @@ from flask_cors import CORS
 import uuid
 from dotenv import load_dotenv
 import os
+import secrets
 import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -19,6 +20,31 @@ from privastream.core.logging import logger
 DEFAULT_MEDIASOUP_URL = 'http://localhost:3001'
 ROOM_ID_LENGTH = 8
 MAX_VOTE_BUFFER_SIZE = 3
+
+
+def require_secret_key() -> str:
+    """Return the configured SECRET_KEY, failing loudly in production.
+
+    A missing key silently falls back to None in Flask, which weakens session
+    signing. Require it in production; in development generate an ephemeral key
+    (sessions won't survive a restart, which is fine for local dev).
+    """
+    key = os.getenv('SECRET_KEY')
+    if key:
+        return key
+    if os.getenv('FLASK_ENV') == 'production':
+        raise RuntimeError('SECRET_KEY environment variable must be set in production')
+    logger.warning('SECRET_KEY not set; using an ephemeral development key')
+    return secrets.token_hex(32)
+
+
+def allowed_origins() -> list:
+    """CORS allowlist from CORS_ALLOWED_ORIGINS (comma-separated).
+
+    Defaults to the localhost frontend for development. Never wildcard.
+    """
+    raw = os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:3000')
+    return [o.strip() for o in raw.split(',') if o.strip()]
 
 class RoomManager:
     """Manages room state and operations"""
@@ -79,9 +105,9 @@ class RoomManager:
 
 # Initialize Flask app
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
-CORS(app, origins="*")
-socketio = SocketIO(app, path='/backend/socket.io', cors_allowed_origins="*", 
+app.config['SECRET_KEY'] = require_secret_key()
+CORS(app, origins=allowed_origins())
+socketio = SocketIO(app, path='/backend/socket.io', cors_allowed_origins=allowed_origins(),
                    async_mode='threading', logger=True, engineio_logger=True)
 
 # Configuration
@@ -252,10 +278,10 @@ def handle_get_room_info(data):
 def create_app():
     """Application factory for Flask app."""
     app = Flask(__name__)
-    app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
-    CORS(app, origins="*")
-    
-    socketio = SocketIO(app, path='/backend/socket.io', cors_allowed_origins="*", 
+    app.config['SECRET_KEY'] = require_secret_key()
+    CORS(app, origins=allowed_origins())
+
+    socketio = SocketIO(app, path='/backend/socket.io', cors_allowed_origins=allowed_origins(),
                        async_mode='threading', logger=True, engineio_logger=True)
     
     return app, socketio
