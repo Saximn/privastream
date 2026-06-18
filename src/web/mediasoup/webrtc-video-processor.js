@@ -38,7 +38,8 @@ class WebRTCVideoProcessor extends EventEmitter {
         frameCount: 0,
         lastDetection: null,
         lastProcessedFrame: 0,
-        processingQueue: []
+        processingQueue: [],
+        tracks: []
       });
       
       // Store reference to original producer for this room
@@ -77,6 +78,8 @@ class WebRTCVideoProcessor extends EventEmitter {
         if (detectionResult) {
           state.lastDetection = detectionResult;
           state.lastProcessedFrame = frameCount;
+          state.tracks = this.updateMotionTracks(state.tracks, detectionResult.boundingBoxes || [], frameCount);
+          detectionResult.boundingBoxes = state.tracks.map(track => track.box);
           
           console.log(`[WEBRTC-VIDEO-PROCESSOR] 🎯 Detection complete: ${detectionResult.boundingBoxes?.length || 0} regions found`);
           
@@ -89,9 +92,9 @@ class WebRTCVideoProcessor extends EventEmitter {
       } else if (state.lastDetection) {
         // Interpolate bounding boxes for intermediate frames
         const framesSinceDetection = frameCount - state.lastProcessedFrame;
-        const interpolatedBoxes = this.interpolateBoundingBoxes(state.lastDetection.boundingBoxes, framesSinceDetection);
+        const interpolatedBoxes = this.predictTrackedBoxes(state.tracks, framesSinceDetection);
         
-        console.log(`[WEBRTC-VIDEO-PROCESSOR] 📐 Frame ${frameCount}: Using interpolated bounding boxes (${framesSinceDetection} frames since detection)`);
+        console.log(`[WEBRTC-VIDEO-PROCESSOR] 📐 Frame ${frameCount}: Using motion-tracked bounding boxes (${framesSinceDetection} frames since detection)`);
         
         // Apply blur to current frame using interpolated boxes
         if (interpolatedBoxes && interpolatedBoxes.length > 0) {
@@ -200,35 +203,78 @@ class WebRTCVideoProcessor extends EventEmitter {
   }
   
   /**
-   * Interpolate bounding boxes for intermediate frames
+   * Update simple constant-velocity tracks from fresh detections.
    */
-  interpolateBoundingBoxes(originalBoxes, framesSinceDetection) {
-    if (!originalBoxes || originalBoxes.length === 0) return [];
-    
-    // Simple interpolation: slightly expand boxes over time
-    const expansionFactor = 1 + (framesSinceDetection * 0.02); // 2% expansion per frame
-    const maxExpansion = 1.3; // Max 30% expansion
-    const actualExpansion = Math.min(expansionFactor, maxExpansion);
-    
-    return originalBoxes.map(box => {
-      if (box.length !== 4) return box;
-      
-      const [x1, y1, x2, y2] = box;
-      const width = x2 - x1;
-      const height = y2 - y1;
-      const centerX = x1 + width / 2;
-      const centerY = y1 + height / 2;
-      
-      const newWidth = width * actualExpansion;
-      const newHeight = height * actualExpansion;
-      
-      return [
-        Math.max(0, centerX - newWidth / 2),
-        Math.max(0, centerY - newHeight / 2),
-        centerX + newWidth / 2,
-        centerY + newHeight / 2
-      ];
-    });
+  updateMotionTracks(previousTracks, boxes, frameCount) {
+    const usedPrevious = new Set();
+    const maxCenterDistance = 160;
+
+    return boxes
+      .filter(box => Array.isArray(box) && box.length === 4)
+      .map((box, index) => {
+        const center = this.boxCenter(box);
+        let bestTrack = null;
+        let bestDistance = Infinity;
+        let bestIndex = -1;
+
+        previousTracks.forEach((track, trackIndex) => {
+          if (usedPrevious.has(trackIndex)) return;
+          const predicted = this.predictBox(track, frameCount - track.frameCount);
+          const predictedCenter = this.boxCenter(predicted);
+          const distance = Math.hypot(center.x - predictedCenter.x, center.y - predictedCenter.y);
+          if (distance < bestDistance && distance <= maxCenterDistance) {
+            bestTrack = track;
+            bestDistance = distance;
+            bestIndex = trackIndex;
+          }
+        });
+
+        if (!bestTrack) {
+          return { id: `${frameCount}-${index}`, box, velocity: [0, 0, 0, 0], frameCount };
+        }
+
+        usedPrevious.add(bestIndex);
+        const framesElapsed = Math.max(1, frameCount - bestTrack.frameCount);
+        const measuredVelocity = box.map((value, i) => (value - bestTrack.box[i]) / framesElapsed);
+        const velocity = measuredVelocity.map((value, i) => (bestTrack.velocity[i] * 0.6) + (value * 0.4));
+        return { id: bestTrack.id, box, velocity, frameCount };
+      });
+  }
+
+  /**
+   * Predict tracked boxes for intermediate frames using last measured velocity.
+   */
+  predictTrackedBoxes(tracks, framesSinceDetection) {
+    if (!tracks || tracks.length === 0) return [];
+    const uncertaintyGrowth = Math.min(framesSinceDetection * 0.01, 0.15);
+    return tracks.map(track => this.expandBox(this.predictBox(track, framesSinceDetection), uncertaintyGrowth));
+  }
+
+  predictBox(track, framesElapsed) {
+    return track.box.map((value, i) => value + (track.velocity[i] * framesElapsed));
+  }
+
+  expandBox(box, growth) {
+    const center = this.boxCenter(box);
+    const width = (box[2] - box[0]) * (1 + growth);
+    const height = (box[3] - box[1]) * (1 + growth);
+    const x1 = Math.max(0, center.x - width / 2);
+    const y1 = Math.max(0, center.y - height / 2);
+    const x2 = Math.min(this.options.frameWidth, center.x + width / 2);
+    const y2 = Math.min(this.options.frameHeight, center.y + height / 2);
+    return [
+      x1,
+      y1,
+      x2,
+      y2
+    ];
+  }
+
+  boxCenter(box) {
+    return {
+      x: box[0] + ((box[2] - box[0]) / 2),
+      y: box[1] + ((box[3] - box[1]) / 2)
+    };
   }
   
   /**
