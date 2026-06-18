@@ -186,23 +186,26 @@ class AudioProcessor extends EventEmitter {
         
       } else {
         console.error('[AUDIO-PROCESSOR] Audio processing failed:', result.error);
-        // Use original audio as fallback
+        // PRIVACY PROTECTION: never emit the original, un-redacted audio on
+        // failure. Emit silence of the same length so timing/sync is preserved
+        // while leaking nothing. Mirrors the video processor's drop-on-failure
+        // policy (webrtc-video-processor.js).
         this.processedAudioQueue.push({
-          buffer: audioBuffer,
-          metadata: { success: false, error: result.error }
+          buffer: Buffer.alloc(audioBuffer.length),
+          metadata: { success: false, redacted: 'silence', error: result.error }
         });
         this.processAudioQueue();
       }
-      
+
     } catch (error) {
       console.error('[AUDIO-PROCESSOR] Error calling redaction service:', error);
-      // Use original audio as fallback
+      // PRIVACY PROTECTION: emit silence, never the raw audio, on error.
       this.processedAudioQueue.push({
-        buffer: audioBuffer,
-        metadata: { success: false, error: error.message }
+        buffer: Buffer.alloc(audioBuffer.length),
+        metadata: { success: false, redacted: 'silence', error: error.message }
       });
       this.processAudioQueue();
-      
+
     } finally {
       this.isProcessing = false;
     }
