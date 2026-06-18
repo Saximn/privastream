@@ -115,6 +115,14 @@ python scripts/benchmark.py --config configs/balanced.yaml
 - **Audio**: Measure precision/recall of PII-tagged tokens per 5s window.
 - **Latency**: Measure FPS (median, p95) and time breakdown per component.
 
+## 🔒 Branch Protection
+
+The `main` branch is protected and must always remain runnable. All changes land
+through pull requests that must pass the automated CI checks (`Lint (flake8)` and
+`Tests (pytest)`) before they can be merged. See
+[`.github/BRANCH_PROTECTION.md`](.github/BRANCH_PROTECTION.md) for the full set of
+required branch protection settings.
+
 ## 🗺️ Roadmap
 
 - [ ] Multi-language street/address lexicons
