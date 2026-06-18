@@ -1,4 +1,5 @@
 .env
+.env.local
 venv*
 datasets
 *.jpg
@@ -10,3 +11,18 @@ node_modules/
 *.pem
 __pycache__/
 env/
+
+# Build output
+.next/
+build/
+dist/
+*.egg-info/
+
+# Logs & runtime output
+*.log
+log_mediasoup.txt
+video.log
+
+# Caches & model artifacts
+*.pack.gz
+*.joblib
