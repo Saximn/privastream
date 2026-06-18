@@ -149,7 +149,7 @@ export default function ProcessedVideoViewer() {
       // Handle processed audio from server
       sfuSocketRef.current.on("processed-audio", (data: any) => {
         console.log("[VIEWER] Received processed audio:", {
-          dataSize: data.audioData.length,
+          dataSize: data.audioData.byteLength ?? data.audioData.length,
           piiCount: data.metadata?.pii_count || 0,
           timestamp: data.timestamp,
         });
@@ -253,14 +253,15 @@ export default function ProcessedVideoViewer() {
       }
     };
 
-    const playProcessedAudio = async (audioData: number[]) => {
+    const playProcessedAudio = async (audioData: ArrayBuffer | number[]) => {
       if (!audioContextRef.current) return;
 
       try {
         const audioContext = audioContextRef.current;
 
-        // Convert int16 array back to float32 audio buffer
-        const pcmData = new Int16Array(audioData);
+        // Server now sends raw 16-bit PCM as a binary ArrayBuffer; the
+        // Int16Array constructor accepts both that and the legacy number[].
+        const pcmData = new Int16Array(audioData as ArrayBuffer);
         const audioBuffer = audioContext.createBuffer(1, pcmData.length, 16000); // Mono, 16kHz
 
         // Convert to float32 mono

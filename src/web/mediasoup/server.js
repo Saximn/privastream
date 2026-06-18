@@ -144,6 +144,33 @@ const frameBuffer = new Map(); // roomId -> [{frame, timestamp}]
 // Audio chunk timing tracking for sync
 const audioChunkStartTimes = new Map(); // roomId -> [startTime1, startTime2, ...]
 
+// Jitter buffer for delayed audio delivery. Replaces a per-chunk setTimeout
+// (one live timer per audio chunk, each pinning a payload on the heap) with a
+// single ordered queue per room drained by one interval. Items are enqueued in
+// non-decreasing deliverAt order, so FIFO draining preserves ordering.
+const audioDeliveryQueues = new Map(); // roomId -> [{ deliverAt, payload }]
+const AUDIO_DELIVERY_TICK_MS = 50;
+
+function enqueueAudioDelivery(roomId, deliverAt, payload) {
+  if (!audioDeliveryQueues.has(roomId)) audioDeliveryQueues.set(roomId, []);
+  audioDeliveryQueues.get(roomId).push({ deliverAt, payload });
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [roomId, queue] of audioDeliveryQueues) {
+    const room = rooms.get(roomId);
+    if (!room) {
+      audioDeliveryQueues.delete(roomId); // room gone — drop its backlog
+      continue;
+    }
+    while (queue.length > 0 && queue[0].deliverAt <= now) {
+      const { payload } = queue.shift();
+      room.viewers.forEach(viewerId => io.to(viewerId).emit('processed-audio', payload));
+    }
+  }
+}, AUDIO_DELIVERY_TICK_MS);
+
 // Initialize Mediasoup
 async function createWorker() {
   worker = await mediasoup.createWorker({ rtcMinPort: 10000, rtcMaxPort: 10100 });
@@ -426,9 +453,16 @@ io.on('connection', socket => {
     
     socket.on('audio-data', async (audioData) => {
       try {
-        // Convert array back to Int16Array, then to Buffer
-        const int16Array = new Int16Array(audioData);
-        const audioBuffer = Buffer.from(int16Array.buffer);
+        // Audio arrives as a binary ArrayBuffer/Buffer of raw 16-bit PCM.
+        // Fall back to the legacy JSON number-array format for old clients.
+        let audioBuffer;
+        if (Buffer.isBuffer(audioData)) {
+          audioBuffer = audioData;
+        } else if (audioData instanceof ArrayBuffer) {
+          audioBuffer = Buffer.from(audioData);
+        } else {
+          audioBuffer = Buffer.from(new Int16Array(audioData).buffer);
+        }
         
         console.log(`[AUDIO-SERVER] 🎤 Received audio data for room ${roomId}:`, audioBuffer.length, 'bytes');
         
@@ -492,19 +526,16 @@ io.on('connection', socket => {
           
           console.log(`[AUDIO-SERVER] 🕐 Audio sync timing: chunk end ${audioChunkEndTime}, delivery delay ${deliveryDelay}ms`);
           
-          setTimeout(() => {
-            const room = rooms.get(roomId);
-            if (room) {
-              room.viewers.forEach(viewerId => {
-                io.to(viewerId).emit('processed-audio', {
-                  audioData: Array.from(new Int16Array(result.processedAudio.buffer)),
-                  metadata: result.metadata,
-                  timestamp: Date.now()
-                });
-              });
-              console.log(`[AUDIO-SERVER] 📤 Delivered audio to ${room.viewers.size} viewers (delay: ${deliveryDelay}ms)`);
-            }
-          }, deliveryDelay);
+          // Enqueue for ordered, delayed delivery via the shared jitter buffer.
+          // processedAudio is a Buffer of raw 16-bit PCM; sent as a binary frame
+          // (not a JSON number array) — see docs/IMPROVEMENTS.md §2.1.
+          const deliverAt = Date.now() + deliveryDelay;
+          enqueueAudioDelivery(roomId, deliverAt, {
+            audioData: result.processedAudio,
+            metadata: result.metadata,
+            timestamp: deliverAt
+          });
+          console.log(`[AUDIO-SERVER] 📥 Queued audio for delivery in ${deliveryDelay}ms`);
           
         } else {
           console.log('[AUDIO-SERVER] ⚠️ Audio processing failed or not ready yet');
