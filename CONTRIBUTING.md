@@ -130,6 +130,72 @@ required branch protection settings.
 - [ ] Virtual camera output for OBS/VT Cam
 - [ ] Per-user ignore lists and manual blur management UI
 
+## 🏷️ Versioning & Releases
+
+PrivaStream follows **[Semantic Versioning](https://semver.org/)** (`MAJOR.MINOR.PATCH`).
+
+### How releases are created
+
+Releases are **tag-driven** — pushing a semver tag to `main` automatically triggers
+the release pipeline (`.github/workflows/release.yml`):
+
+```bash
+# Ensure you are on main and your working tree is clean
+git checkout main
+git pull
+
+# Create an annotated tag
+git tag -a v1.2.3 -m "Release v1.2.3"
+git push origin v1.2.3
+```
+
+The pipeline then:
+1. **Creates a GitHub Release** with auto-generated release notes derived from
+   merged pull-request titles and commits since the previous tag.
+2. **Builds the backend Docker image** and pushes it to the
+   [GitHub Container Registry (GHCR)](https://ghcr.io/saximn/privastream) with
+   the following tags:
+   | Tag | Example | Description |
+   |-----|---------|-------------|
+   | Full semver | `v1.2.3` | Exact release version |
+   | Minor semver | `v1.2` | Latest patch for this minor |
+   | Major semver | `v1` | Latest minor for this major |
+   | `latest` | `latest` | Most recent stable release |
+   | Commit SHA | `sha-abc1234` | Immutable reference for debugging |
+
+### Version bump guidelines
+
+| Change type | Version component to bump | Example |
+|-------------|--------------------------|---------|
+| Breaking API change | `MAJOR` | `v1.0.0` → `v2.0.0` |
+| New backwards-compatible feature | `MINOR` | `v1.0.0` → `v1.1.0` |
+| Bug fix / patch | `PATCH` | `v1.0.0` → `v1.0.1` |
+
+### Commit message conventions
+
+We recommend following
+[Conventional Commits](https://www.conventionalcommits.org/) — this ensures
+auto-generated release notes are clean and grouped:
+
+```
+feat: add license plate whitelist support
+fix: resolve memory leak in video pipeline
+docs: update API reference for /process endpoint
+chore: bump dependency versions
+```
+
+Conventional commit prefixes like `feat!:` or `BREAKING CHANGE:` in the body
+signal a `MAJOR` bump.
+
+### Updating the changelog
+
+After tagging, update [`CHANGELOG.md`](CHANGELOG.md):
+
+1. Move the `[Unreleased]` section content under a new `[X.Y.Z] - YYYY-MM-DD`
+   heading.
+2. Open a new empty `[Unreleased]` section at the top.
+3. Commit directly to `main` (no PR required for changelog-only commits).
+
 ## 📞 Support & Community
 
 - **GitHub Issues**: [Report bugs and request features](https://github.com/Saximn/tiktok-techjam-2025/issues)

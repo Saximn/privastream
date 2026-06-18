@@ -13,6 +13,31 @@ const crypto = require('crypto');
 require('dotenv').config();
 const API_CONFIG = require('./config').default;
 
+// Security / network configuration (env-driven).
+const NODE_ENV = process.env.NODE_ENV || 'development';
+
+// CORS allowlist: comma-separated origins; defaults to the localhost frontend
+// for development. Never wildcard — any site could otherwise drive the SFU.
+const CORS_ALLOWED_ORIGINS = (process.env.CORS_ALLOWED_ORIGINS || 'http://localhost:3000')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+// Interface the SFU binds to, and the public IP advertised to WebRTC clients.
+const MEDIASOUP_LISTEN_IP = process.env.MEDIASOUP_LISTEN_IP || '0.0.0.0';
+let MEDIASOUP_ANNOUNCED_IP = process.env.MEDIASOUP_ANNOUNCED_IP;
+if (!MEDIASOUP_ANNOUNCED_IP) {
+  if (NODE_ENV === 'production') {
+    // A localhost default in production makes WebRTC unreachable for everyone
+    // but the host — fail loudly instead of silently shipping a broken SFU.
+    throw new Error(
+      'MEDIASOUP_ANNOUNCED_IP must be set in production (the public IP reachable by WebRTC clients).'
+    );
+  }
+  MEDIASOUP_ANNOUNCED_IP = '127.0.0.1';
+  console.warn('[SERVER] MEDIASOUP_ANNOUNCED_IP not set; defaulting to 127.0.0.1 (local-only).');
+}
+
 // Try to import node-fetch, fallback to http if needed
 let fetch;
 try {
@@ -80,11 +105,11 @@ const videoProcessor = new WebRTCVideoProcessor({
 
 const app = express();
 const server = http.createServer(app);
-app.use(cors());
+app.use(cors({ origin: CORS_ALLOWED_ORIGINS, methods: ["GET", "POST"] }));
 app.use(express.json());
 
 const io = new Server(server, {
-  cors: { origin: "*", methods: ["GET", "POST"] }
+  cors: { origin: CORS_ALLOWED_ORIGINS, methods: ["GET", "POST"] }
 });
 
 // --- Room-token auth (mirrors src/web/backend/auth.py; HMAC-SHA256) ---------
@@ -135,7 +160,7 @@ const mediaCodecs = [
 ];
 
 const webRtcTransportOptions = {
-  listenIps: [{ ip: '0.0.0.0', announcedIp: '127.0.0.1' }],
+  listenIps: [{ ip: MEDIASOUP_LISTEN_IP, announcedIp: MEDIASOUP_ANNOUNCED_IP }],
   enableUdp: true,
   enableTcp: true,
   preferUdp: true
@@ -160,6 +185,33 @@ const frameBuffer = new Map(); // roomId -> [{frame, timestamp}]
 
 // Audio chunk timing tracking for sync
 const audioChunkStartTimes = new Map(); // roomId -> [startTime1, startTime2, ...]
+
+// Jitter buffer for delayed audio delivery. Replaces a per-chunk setTimeout
+// (one live timer per audio chunk, each pinning a payload on the heap) with a
+// single ordered queue per room drained by one interval. Items are enqueued in
+// non-decreasing deliverAt order, so FIFO draining preserves ordering.
+const audioDeliveryQueues = new Map(); // roomId -> [{ deliverAt, payload }]
+const AUDIO_DELIVERY_TICK_MS = 50;
+
+function enqueueAudioDelivery(roomId, deliverAt, payload) {
+  if (!audioDeliveryQueues.has(roomId)) audioDeliveryQueues.set(roomId, []);
+  audioDeliveryQueues.get(roomId).push({ deliverAt, payload });
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [roomId, queue] of audioDeliveryQueues) {
+    const room = rooms.get(roomId);
+    if (!room) {
+      audioDeliveryQueues.delete(roomId); // room gone — drop its backlog
+      continue;
+    }
+    while (queue.length > 0 && queue[0].deliverAt <= now) {
+      const { payload } = queue.shift();
+      room.viewers.forEach(viewerId => io.to(viewerId).emit('processed-audio', payload));
+    }
+  }
+}, AUDIO_DELIVERY_TICK_MS);
 
 // Initialize Mediasoup
 async function createWorker() {
@@ -443,9 +495,16 @@ io.on('connection', socket => {
     
     socket.on('audio-data', async (audioData) => {
       try {
-        // Convert array back to Int16Array, then to Buffer
-        const int16Array = new Int16Array(audioData);
-        const audioBuffer = Buffer.from(int16Array.buffer);
+        // Audio arrives as a binary ArrayBuffer/Buffer of raw 16-bit PCM.
+        // Fall back to the legacy JSON number-array format for old clients.
+        let audioBuffer;
+        if (Buffer.isBuffer(audioData)) {
+          audioBuffer = audioData;
+        } else if (audioData instanceof ArrayBuffer) {
+          audioBuffer = Buffer.from(audioData);
+        } else {
+          audioBuffer = Buffer.from(new Int16Array(audioData).buffer);
+        }
         
         console.log(`[AUDIO-SERVER] 🎤 Received audio data for room ${roomId}:`, audioBuffer.length, 'bytes');
         
@@ -509,19 +568,16 @@ io.on('connection', socket => {
           
           console.log(`[AUDIO-SERVER] 🕐 Audio sync timing: chunk end ${audioChunkEndTime}, delivery delay ${deliveryDelay}ms`);
           
-          setTimeout(() => {
-            const room = rooms.get(roomId);
-            if (room) {
-              room.viewers.forEach(viewerId => {
-                io.to(viewerId).emit('processed-audio', {
-                  audioData: Array.from(new Int16Array(result.processedAudio.buffer)),
-                  metadata: result.metadata,
-                  timestamp: Date.now()
-                });
-              });
-              console.log(`[AUDIO-SERVER] 📤 Delivered audio to ${room.viewers.size} viewers (delay: ${deliveryDelay}ms)`);
-            }
-          }, deliveryDelay);
+          // Enqueue for ordered, delayed delivery via the shared jitter buffer.
+          // processedAudio is a Buffer of raw 16-bit PCM; sent as a binary frame
+          // (not a JSON number array) — see docs/IMPROVEMENTS.md §2.1.
+          const deliverAt = Date.now() + deliveryDelay;
+          enqueueAudioDelivery(roomId, deliverAt, {
+            audioData: result.processedAudio,
+            metadata: result.metadata,
+            timestamp: deliverAt
+          });
+          console.log(`[AUDIO-SERVER] 📥 Queued audio for delivery in ${deliveryDelay}ms`);
           
         } else {
           console.log('[AUDIO-SERVER] ⚠️ Audio processing failed or not ready yet');

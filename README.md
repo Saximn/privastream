@@ -2,6 +2,8 @@
 
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
 ![Winner](https://img.shields.io/badge/TikTok%20TechJam%202025-🏆%20CHAMPION-gold.svg)
+[![Release](https://img.shields.io/github/v/release/Saximn/privastream?sort=semver&label=release)](https://github.com/Saximn/privastream/releases)
+[![Docker Image](https://img.shields.io/badge/ghcr.io-privastream-blue?logo=docker)](https://ghcr.io/saximn/privastream)
 
 ## 🏆 **TikTok TechJam 2025 Winner** 🏆
 
