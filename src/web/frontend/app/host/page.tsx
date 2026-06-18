@@ -113,6 +113,9 @@ export default function Host() {
 					path: "/mediasoup/socket.io",
           transports: ["websocket"],
           reconnectionAttempts: 3,
+          // Forward the signed room token (issued by the backend) to the SFU.
+          // Ignored unless the SFU has REQUIRE_AUTH enabled.
+          auth: { token: (roomResponse as any).token },
         });
 
         await new Promise<void>((resolve, reject) => {
