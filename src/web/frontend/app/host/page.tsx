@@ -414,9 +414,12 @@ export default function Host() {
           pcmData[i] = sample * 0x7fff;
         }
 
-        // Send PCM data to server for processing
+        // Send PCM data to server for processing as a binary ArrayBuffer.
+        // Socket.IO transmits this as a binary frame — far smaller than the old
+        // JSON number array (which serialized every 16-bit sample as ASCII
+        // digits, ~5-10x the raw PCM size). See docs/IMPROVEMENTS.md §2.1.
         if (sfuSocketRef.current) {
-          sfuSocketRef.current.emit("audio-data", Array.from(pcmData));
+          sfuSocketRef.current.emit("audio-data", pcmData.buffer);
         }
 
         // Copy input to output but muted to avoid feedback
