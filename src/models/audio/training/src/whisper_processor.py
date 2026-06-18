@@ -3,14 +3,15 @@ Whisper-based audio transcription processor for livestream PII detection pipelin
 """
 
 import asyncio
-import whisper
+import importlib
+import importlib.util
 import torch
 import numpy as np
 import logging
 import time
 import queue
 import threading
-from typing import Dict, List, Optional, Union, Callable
+from typing import Dict, List, Optional, Union, Callable, Any
 from concurrent.futures import ThreadPoolExecutor
 import soundfile as sf
 import librosa
@@ -34,7 +35,10 @@ class WhisperProcessor:
         compute_type: str = "float16",
         language: Optional[str] = "en",
         max_workers: int = 2,
-        enable_word_timestamps: bool = True
+        enable_word_timestamps: bool = True,
+        model_size: Optional[str] = None,
+        enable_vad: bool = True,
+        vad_parameters: Optional[Dict[str, Any]] = None
     ):
         """
         Initialize the Whisper processor.
@@ -46,24 +50,27 @@ class WhisperProcessor:
             language: Language code or None for auto-detection
             max_workers: Maximum number of worker threads for parallel processing
             enable_word_timestamps: Whether to generate word-level timestamps
+            model_size: Optional alias for model_name for faster-whisper-style configs
+            enable_vad: Whether to enable VAD when the faster-whisper backend is available
+            vad_parameters: Optional faster-whisper VAD parameters
         """
-        self.model_name = model_name
+        self.model_name = model_size or model_name
+        self.model_size = self.model_name
         self.device = device
         self.compute_type = compute_type
         self.language = language
         self.max_workers = max_workers
         self.enable_word_timestamps = enable_word_timestamps
+        self.enable_vad = enable_vad
+        self.vad_parameters = vad_parameters or {}
+        self.backend = "faster_whisper" if importlib.util.find_spec("faster_whisper") else "openai_whisper"
         
         # Set up logging
         self.logger = logging.getLogger(self.__class__.__name__)
         
         # Load the Whisper model
-        self.logger.info(f"Loading Whisper model: {model_name}")
-        self.model = whisper.load_model(
-            model_name, 
-            device=device,
-            download_root=None
-        )
+        self.logger.info(f"Loading Whisper model: {self.model_name} with {self.backend}")
+        self.model = self._load_model()
         
         # Thread pool for parallel processing
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
@@ -80,7 +87,31 @@ class WhisperProcessor:
             'errors': 0
         }
         
-        self.logger.info(f"Whisper processor initialized with model {model_name} on {device}")
+        self.logger.info(f"Whisper processor initialized with model {self.model_name} on {device}")
+
+    def _load_model(self):
+        """Load the preferred Whisper backend, falling back to openai-whisper."""
+        if self.backend == "faster_whisper":
+            try:
+                faster_whisper = importlib.import_module("faster_whisper")
+                return faster_whisper.WhisperModel(
+                    self.model_name,
+                    device=self.device,
+                    compute_type=self.compute_type
+                )
+            except (ImportError, ModuleNotFoundError, OSError, RuntimeError, ValueError) as exc:
+                self.logger.warning(
+                    "faster_whisper backend failed to initialize (%s); falling back to openai_whisper",
+                    exc
+                )
+                self.backend = "openai_whisper"
+
+        openai_whisper = importlib.import_module("whisper")
+        return openai_whisper.load_model(
+            self.model_name,
+            device=self.device,
+            download_root=None
+        )
     
     def preprocess_audio(
         self, 
@@ -169,19 +200,17 @@ class WhisperProcessor:
                 audio_segment.sample_rate
             )
             
-            # Prepare transcription options
-            options = {
-                "language": self.language,
-                "fp16": self.compute_type == "float16",
-                "word_timestamps": return_word_timestamps if return_word_timestamps is not None else self.enable_word_timestamps
-            }
-            
             # Perform transcription
-            result = self.model.transcribe(audio_array, **options)
+            word_timestamps_enabled = (
+                return_word_timestamps
+                if return_word_timestamps is not None
+                else self.enable_word_timestamps
+            )
+            result = self._transcribe_audio(audio_array, word_timestamps_enabled)
             
             # Extract word-level timestamps if available
             word_timestamps = []
-            if options["word_timestamps"] and "segments" in result:
+            if word_timestamps_enabled and "segments" in result:
                 for segment in result["segments"]:
                     if "words" in segment:
                         for word in segment["words"]:
@@ -232,6 +261,62 @@ class WhisperProcessor:
                 segment_id=audio_segment.segment_id,
                 word_timestamps=[]
             )
+
+    def _transcribe_audio(
+        self,
+        audio_array: np.ndarray,
+        word_timestamps_enabled: bool
+    ) -> Dict:
+        """Transcribe audio and normalize backend-specific results."""
+        if self.backend == "faster_whisper":
+            segments, info = self.model.transcribe(
+                audio_array,
+                language=self.language,
+                word_timestamps=word_timestamps_enabled,
+                vad_filter=self.enable_vad,
+                vad_parameters=self.vad_parameters or None
+            )
+            return self._normalize_faster_whisper_result(segments, info)
+
+        return self.model.transcribe(
+            audio_array,
+            language=self.language,
+            fp16=self.compute_type == "float16",
+            word_timestamps=word_timestamps_enabled
+        )
+
+    def _normalize_faster_whisper_result(self, segments, info) -> Dict:
+        """Convert faster-whisper output to the openai-whisper result shape used internally."""
+        normalized_segments = []
+        text_parts = []
+
+        for segment in segments:
+            segment_text = getattr(segment, "text", "")
+            text_parts.append(segment_text)
+
+            normalized_segment = {
+                "text": segment_text,
+                "start": getattr(segment, "start", 0.0),
+                "end": getattr(segment, "end", 0.0),
+                "words": []
+            }
+
+            for word in getattr(segment, "words", None) or []:
+                probability = getattr(word, "probability", 1.0)
+                normalized_segment["words"].append({
+                    "word": getattr(word, "word", ""),
+                    "start": getattr(word, "start", 0.0),
+                    "end": getattr(word, "end", 0.0),
+                    "probability": 1.0 if probability is None else probability
+                })
+
+            normalized_segments.append(normalized_segment)
+
+        return {
+            "text": "".join(text_parts),
+            "language": getattr(info, "language", self.language or "en"),
+            "segments": normalized_segments
+        }
     
     def _calculate_confidence(self, whisper_result: Dict) -> float:
         """Calculate overall confidence score from Whisper result."""
