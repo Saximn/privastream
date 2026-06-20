@@ -1,10 +1,7 @@
-# Dockerfile for Privastream
 FROM python:3.10-slim
 
-# Set working directory
 WORKDIR /app
 
-# Install system dependencies
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
@@ -18,34 +15,28 @@ RUN apt-get update && apt-get install -y \
     libgthread-2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better caching
-COPY requirements.txt .
 COPY pyproject.toml .
 COPY setup.py .
-
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir -e .
-
-# Copy application code
-COPY privastream/ ./privastream/
-COPY main.py .
 COPY README.md .
 COPY LICENSE .
+COPY src/web/backend/requirements.txt ./src/web/backend/requirements.txt
 
-# Create necessary directories
+RUN pip install --no-cache-dir -r src/web/backend/requirements.txt
+
+COPY src/ ./src/
+COPY main.py .
+
+RUN pip install --no-cache-dir -e .
+
 RUN mkdir -p /app/data /app/models /app/logs
 
-# Set environment variables
 ENV PYTHONPATH="/app"
 ENV FLASK_ENV="production"
+ENV SOCKETIO_ASYNC_MODE="eventlet"
 
-# Expose ports
-EXPOSE 5000 3000 3001
+EXPOSE 5000 5001
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:5000/health')"
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/health').read()"
 
-# Default command
-CMD ["python", "main.py", "web", "--host", "0.0.0.0", "--port", "5000", "--config", "production"]
+CMD ["gunicorn", "-k", "eventlet", "-w", "1", "--bind", "0.0.0.0:5000", "src.web.backend.wsgi_backend:app"]

@@ -59,6 +59,7 @@ export default function Host() {
   const mediasoupClientRef = useRef<MediasoupClient | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const frameIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const roomTokenRef = useRef<string | null>(null);
   // Teardown for the frame-capture loop (covers both requestVideoFrameCallback
   // and the setInterval fallback). Set in startFrameProcessing.
   const stopFrameCaptureRef = useRef<(() => void) | null>(null);
@@ -88,6 +89,7 @@ export default function Host() {
         const roomResponse = await socketRef.current.createRoom();
         console.log("[DEBUG] Room created:", roomResponse);
         setRoomId(roomResponse.roomId);
+        roomTokenRef.current = roomResponse.token || null;
 
         // Check if we have enrollment data and associate it with the new room
         const enrolledRoomId = sessionStorage.getItem("enrolledRoomId");
@@ -107,6 +109,9 @@ export default function Host() {
                 method: "POST",
                 headers: {
                   "Content-Type": "application/json",
+                  ...(roomResponse.token
+                    ? { Authorization: `Bearer ${roomResponse.token}` }
+                    : {}),
                 },
                 body: JSON.stringify({
                   from_room_id: enrolledRoomId,
@@ -140,7 +145,7 @@ export default function Host() {
         }
 
         // SFU socket
-	console.log("roomResponse:", roomResponse);
+        console.log("roomResponse:", roomResponse);
         setConnectionState("connecting to mediasoup...");
         const sfuUrl = roomResponse.mediasoupUrl || API_CONFIG.SFU_URL;
         sfuSocketRef.current = io(sfuUrl, {
@@ -192,7 +197,7 @@ export default function Host() {
             );
             sfuSocketRef.current!.emit(
               "create-room",
-              { roomId: roomResponse.roomId },
+              { roomId: roomResponse.roomId, token: roomResponse.token },
               (sfuResponse: any) => {
                 clearTimeout(timeout);
                 console.log(
@@ -417,10 +422,15 @@ export default function Host() {
         const frameData = canvas.toDataURL("image/jpeg", 0.6);
 
         const res = await fetch(
-          `${API_CONFIG.VIDEO_API_URL}detect-faces-mouths`,
+          `${API_CONFIG.VIDEO_API_URL}/detect-faces-mouths`,
           {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              ...(roomTokenRef.current
+                ? { Authorization: `Bearer ${roomTokenRef.current}` }
+                : {}),
+            },
             body: JSON.stringify({
               frame: frameData,
               frame_id: Date.now(),

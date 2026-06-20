@@ -12,14 +12,11 @@ RUN apk add --no-cache \
     python3 \
     linux-headers
 
-# Copy package files
-COPY privastream/web/mediasoup/package*.json ./
+COPY src/web/mediasoup/package*.json ./
 
-# Install dependencies
 RUN npm ci --only=production
 
-# Copy mediasoup server source
-COPY privastream/web/mediasoup/ ./
+COPY src/web/mediasoup/ ./
 
 # Expose ports
 EXPOSE 3001

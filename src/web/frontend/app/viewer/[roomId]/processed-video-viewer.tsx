@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { useParams } from "next/navigation";
 import { io, Socket } from "socket.io-client";
 import API_CONFIG from "@/lib/config";
+import { SocketManager } from "@/lib/socket";
 
 interface ViewerStats {
   connected: boolean;
@@ -36,6 +37,7 @@ export default function ProcessedVideoViewer() {
   const [mounted, setMounted] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const backendSocketRef = useRef<SocketManager | null>(null);
   const sfuSocketRef = useRef<Socket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -54,12 +56,18 @@ export default function ProcessedVideoViewer() {
         setConnectionState("connecting");
         console.log("[VIEWER] Initializing for room:", roomId);
 
+        backendSocketRef.current = new SocketManager();
+        await backendSocketRef.current.connect();
+        const backendJoin = await backendSocketRef.current.joinRoom(roomId);
+        const roomToken = backendJoin.token;
+
         // Connect to SFU server
         console.log("[VIEWER] Connecting to SFU server...");
         sfuSocketRef.current = io(API_CONFIG.SFU_URL, {
 		path:"/mediasoup/socket.io",
           transports: ["websocket"],
-          reconnectionAttempts: 3
+          reconnectionAttempts: 3,
+          auth: { token: roomToken }
         }
         );
 
@@ -302,6 +310,7 @@ export default function ProcessedVideoViewer() {
       if (sfuSocketRef.current) {
         sfuSocketRef.current.disconnect();
       }
+      backendSocketRef.current?.disconnect();
 
       // Clean up audio context
       if (audioContextRef.current) {

@@ -165,6 +165,31 @@ const consumers = new Map();      // consumerId -> consumer
 const processedProducers = new Map(); // originalProducerId -> processedProducerId
 const frameProcessingState = new Map(); // roomId -> { frameCount, lastDetection, lastProcessedFrame }
 
+function roomToken(roomId) {
+  const room = roomId ? rooms.get(roomId) : null;
+  return room && room.token;
+}
+
+function videoApiHeaders(roomId) {
+  const headers = { 'Content-Type': 'application/json' };
+  const token = roomToken(roomId);
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
+
+function videoApiHttpHeaders(postData, roomId) {
+  return {
+    ...videoApiHeaders(roomId),
+    'Content-Length': Buffer.byteLength(postData)
+  };
+}
+
+function socketAuthorizedForRoom(socket, roomId) {
+  if (!REQUIRE_AUTH) return true;
+  const token = socket.handshake.auth && socket.handshake.auth.token;
+  return verifyRoomToken(token, roomId) !== null;
+}
+
 // Enhanced caches for mouth blurring coordination
 const detectionCache = new Map();     // frameId -> detection results
 const piiEventsBuffer = new Map();    // roomId -> PII events array  
@@ -221,7 +246,7 @@ async function sendToPython(frameB64, roomId = null) {
     // Use node-fetch
     const res = await fetch(`${API_CONFIG.VIDEO_API_URL}/process-frame`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: videoApiHeaders(roomId),
       body: JSON.stringify({ frame: frameB64, room_id: roomId })
     });
     const data = await res.json();
@@ -238,10 +263,7 @@ async function sendToPython(frameB64, roomId = null) {
         port: apiUrl.port || (isHttps ? 443 : 80),
         path: apiUrl.pathname + apiUrl.search,
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(postData)
-        }
+        headers: videoApiHttpHeaders(postData, roomId)
       };
       
       const req = http.request(options, (res) => {
@@ -269,7 +291,7 @@ async function sendToPythonForDetection(frameB64, roomId = null) {
   if (fetch) {
     const res = await fetch(`${API_CONFIG.VIDEO_API_URL}/process-frame`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: videoApiHeaders(roomId),
       body: JSON.stringify({ frame: frameB64, detect_only: true, room_id: roomId })
     });
     const data = await res.json();
@@ -289,10 +311,7 @@ async function sendToPythonForDetection(frameB64, roomId = null) {
         port: apiUrl.port || (isHttps ? 443 : 80),
         path: apiUrl.pathname + apiUrl.search,
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(postData)
-        }
+        headers: videoApiHttpHeaders(postData, roomId)
       };
       
       const req = http.request(options, (res) => {
@@ -372,7 +391,7 @@ async function callPythonBlur(frameB64, boundingBoxes, roomId = null) {
     // Use existing endpoint with blur_only flag
     const res = await fetch(`${API_CONFIG.VIDEO_API_URL}/process-frame`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: videoApiHeaders(roomId),
       body: JSON.stringify({ 
         frame: frameB64, 
         blur_only: true,
@@ -400,10 +419,7 @@ async function callPythonBlur(frameB64, boundingBoxes, roomId = null) {
         port: apiUrl.port || (isHttps ? 443 : 80),
         path: apiUrl.pathname + apiUrl.search,
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(postData)
-        }
+        headers: videoApiHttpHeaders(postData, roomId)
       };
       
       const req = http.request(options, (res) => {
@@ -461,8 +477,13 @@ io.on('connection', socket => {
   // Create room
   socket.on('create-room', (data, callback) => {
     const roomId = data.roomId || Math.random().toString(36).substr(2, 8);
+    const token = data.token || (socket.handshake.auth && socket.handshake.auth.token);
+    if (!socketAuthorizedForRoom(socket, roomId)) {
+      return callback({ success: false, error: 'Unauthorized' });
+    }
     const room = { 
       id: roomId, 
+      token,
       host: socket.id, 
       viewers: new Set(), 
       hostProducers: new Map(), 
@@ -580,6 +601,9 @@ io.on('connection', socket => {
   socket.on('join-room', (data, callback) => {
     const room = rooms.get(data.roomId);
     if (!room) return callback({ success:false, error:'Room not found' });
+    if (!socketAuthorizedForRoom(socket, data.roomId)) {
+      return callback({ success: false, error: 'Unauthorized' });
+    }
     room.viewers.add(socket.id);
     socket.join(data.roomId);
     
@@ -604,20 +628,24 @@ io.on('connection', socket => {
   // Get router RTP capabilities
   socket.on('getRouterRtpCapabilities', (data, callback) => {
     if (!router) return callback({ error: 'Router not ready' });
+    if (data?.roomId && !socketAuthorizedForRoom(socket, data.roomId)) {
+      return callback({ error: 'Unauthorized' });
+    }
     callback({ rtpCapabilities: router.rtpCapabilities });
   });
 
   // Create WebRTC transport
   socket.on('createProducerTransport', async (data, callback) => {
     try {
+      const room = rooms.get(data.roomId);
+      if (!room || room.host !== socket.id) {
+        return callback({ error: 'Room not found or unauthorized' });
+      }
       const transport = await router.createWebRtcTransport(webRtcTransportOptions);
       transports.set(transport.id, transport);
       
       // Store transport with room for easier lookup
-      const room = rooms.get(data.roomId);
-      if (room && room.host === socket.id) {
-        room.hostTransports.set(socket.id, transport);
-      }
+      room.hostTransports.set(socket.id, transport);
       
       callback({
         id: transport.id,
@@ -716,7 +744,7 @@ io.on('connection', socket => {
               // STAGE 1: Immediate detection (T+0ms)
               const detectionResult = await fetch(`${API_CONFIG.VIDEO_API_URL}/detect-faces-mouths`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: videoApiHeaders(roomId),
                 body: JSON.stringify({ 
                   frame: frame,
                   frame_id: frameId,
@@ -798,15 +826,16 @@ io.on('connection', socket => {
   // Create consumer transport
   socket.on('createConsumerTransport', async (data, callback) => {
     try {
+      const room = rooms.get(data.roomId);
+      if (!room || !room.viewers.has(socket.id)) {
+        return callback({ error: 'Room not found or unauthorized' });
+      }
       const transport = await router.createWebRtcTransport(webRtcTransportOptions);
       transports.set(transport.id, transport);
       
       // Store transport with room for easier lookup
-      const room = rooms.get(data.roomId);
-      if (room && room.viewers.has(socket.id)) {
-        if (!room.viewerTransports) room.viewerTransports = new Map();
-        room.viewerTransports.set(socket.id, transport);
-      }
+      if (!room.viewerTransports) room.viewerTransports = new Map();
+      room.viewerTransports.set(socket.id, transport);
       
       callback({
         id: transport.id,
@@ -841,6 +870,9 @@ io.on('connection', socket => {
   socket.on('getProducers', (data, callback) => {
     const room = rooms.get(data.roomId);
     if (!room) return callback({ error: 'Room not found' });
+    if (room.host !== socket.id && !room.viewers.has(socket.id)) {
+      return callback({ error: 'Room not found or unauthorized' });
+    }
     
     console.log('[VIDEO-SERVER] 🔍 getProducers called for room:', data.roomId);
     console.log('[VIDEO-SERVER] Available producers in room:', Array.from(room.hostProducers.keys()));
@@ -915,6 +947,12 @@ io.on('connection', socket => {
   // Resume consumer
   socket.on('resumeConsumer', async (data, callback) => {
     try {
+      if (data.roomId) {
+        const room = rooms.get(data.roomId);
+        if (!room || !room.viewers.has(socket.id)) {
+          return callback({ error: 'Room not found or unauthorized' });
+        }
+      }
       const consumer = consumers.get(data.consumerId);
       if (!consumer) return callback({ error: 'Consumer not found' });
       
@@ -948,7 +986,8 @@ io.on('connection', socket => {
         try {
           if (fetch) {
             fetch(`${API_CONFIG.VIDEO_API_URL}/cleanup-room/${roomId}`, {
-              method: 'POST'
+              method: 'POST',
+              headers: videoApiHeaders(roomId)
             }).catch(err => console.error('[SERVER] Video cleanup failed:', err));
           }
         } catch (error) {
@@ -1009,9 +1048,10 @@ async function processVideoFrameWithPII(frameId) {
     // Apply conditional blurring
     const blurResult = await fetch(`${API_CONFIG.VIDEO_API_URL}/apply-conditional-blur`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: videoApiHeaders(roomId),
       body: JSON.stringify({
         frame: originalFrame,
+        room_id: roomId,
         face_blur_regions: face_blur_regions,
         mouth_regions: mouth_regions,
         pii_regions: pii_regions,

@@ -1,316 +1,174 @@
-# PrivaStream API Documentation
+# PrivaStream API
 
-## Overview
+PrivaStream runs three backend-facing services:
 
-PrivaStream provides both REST API endpoints and WebSocket connections for real-time privacy filtering functionality.
+- Room backend: Flask + Flask-SocketIO on `http://localhost:5000`
+- Video filter API: Flask on `http://localhost:5001`
+- Mediasoup SFU: Node.js on `http://localhost:3001`
 
-## Base URLs
-
-- **Development**: `http://localhost:5000`
-- **Production**: Configure based on your deployment
+Frontend configuration uses `NEXT_PUBLIC_BACKEND_URL`, `NEXT_PUBLIC_VIDEO_API_URL`, `NEXT_PUBLIC_SFU_URL`, and `NEXT_PUBLIC_AUDIO_API_URL`. Server-side SFU configuration uses `BACKEND_URL`, `VIDEO_API_URL`, `SFU_URL`, and `AUDIO_API_URL`.
 
 ## Authentication
 
-Currently, the API doesn't require authentication. For production deployments, implement proper authentication mechanisms.
+Room tokens are HMAC-SHA256 tokens issued by the room backend. Enforcement is controlled by `REQUIRE_AUTH`.
 
-## REST API Endpoints
+- `REQUIRE_AUTH=false`: local development compatibility mode.
+- `REQUIRE_AUTH=true`: protected room, SFU, and video-filter routes require `Authorization: Bearer <token>`.
 
-### Health Check
+Tokens bind a caller to a `room_id` and expire. The host receives a token from the `create_room` Socket.IO event. Viewers receive a token from `join_room`.
 
-**GET** `/health`
+## Room Backend
 
-Check if the service is running.
+### `GET /health`
 
-**Response**
+Returns service readiness and in-memory room counts.
+
 ```json
 {
   "status": "healthy",
-  "version": "1.0.0",
-  "timestamp": "2025-01-15T10:30:00Z"
+  "rooms": 1,
+  "users": 2,
+  "expired_rooms_cleaned": 0
 }
 ```
 
-### Process Video/Audio
+### Socket.IO
 
-**POST** `/api/v1/process`
+Path: `/backend/socket.io`
 
-Process video or audio files for PII detection and redaction.
+Client events:
 
-**Request Body**
+- `create_room`
+- `join_room` with `{ "roomId": "..." }`
+- `sfu_streaming_started`
+- `sfu_streaming_stopped`
+- `get_room_info`
+
+Server events:
+
+- `connected`
+- `room_created` with `{ "roomId": "...", "mediasoupUrl": "...", "token": "..." }`
+- `joined_room` with `{ "roomId": "...", "mediasoupUrl": "...", "token": "..." }`
+- `viewer_joined`
+- `viewer_left`
+- `host_disconnected`
+- `streaming_started`
+- `streaming_stopped`
+- `room_info`
+- `error`
+
+## Video Filter API
+
+### `GET /health`
+
+Returns API readiness, detector readiness, and room embedding counts.
+
+### `POST /process-frame`
+
+JSON-compatible frame processing route retained for current clients.
+
+Request:
+
 ```json
 {
-  "input_path": "path/to/input/file.mp4",
-  "output_path": "path/to/output/file.mp4",
-  "config": {
-    "video": {
-      "face_detection": true,
-      "plate_detection": true,
-      "text_detection": true
-    },
-    "audio": {
-      "enabled": true,
-      "chunk_seconds": 5
-    }
+  "frame": "data:image/jpeg;base64,...",
+  "timestamp": 1760000000000,
+  "frame_id": 123,
+  "room_id": "room-id",
+  "blur_only": false,
+  "detect_only": false,
+  "rectangles": [[0, 0, 120, 90]]
+}
+```
+
+Response:
+
+```json
+{
+  "success": true,
+  "frame_id": 123,
+  "frame": "data:image/jpeg;base64,...",
+  "rectangles": [[0, 0, 120, 90]],
+  "processing_mode": "full",
+  "regions_processed": 1,
+  "timings": {
+    "decode_ms": 1.2,
+    "detect_ms": 14.3,
+    "blur_ms": 0.8,
+    "encode_ms": 2.1,
+    "total_ms": 18.4
   }
 }
 ```
 
-**Response**
-```json
-{
-  "job_id": "uuid-string",
-  "status": "processing",
-  "estimated_time": 120
-}
-```
+### `POST /process-frame-binary`
 
-### Job Status
+Binary-compatible variant. The request body is encoded image bytes. Metadata is provided through headers:
 
-**GET** `/api/v1/jobs/{job_id}`
+- `X-Room-Id`
+- `X-Frame-Id`
+- `X-Timestamp-Ms`
+- `X-Blur-Only`
+- `X-Detect-Only`
+- `X-Rectangles` as JSON
 
-Get the status of a processing job.
+The response is `image/jpeg` unless `X-Detect-Only=true`, in which case JSON detection metadata is returned. Response headers include `X-Frame-Id`, `X-Regions-Processed`, and `X-Timings`.
 
-**Response**
-```json
-{
-  "job_id": "uuid-string",
-  "status": "completed",
-  "progress": 100,
-  "output_path": "path/to/output/file.mp4",
-  "processing_time": 95.2
-}
-```
+### `POST /detect-faces-mouths`
 
-### Model Information
+Runs one detector pass and returns coordinate metadata for the host-side blur pipeline.
 
-**GET** `/api/v1/models`
+Response fields include:
 
-Get information about available models.
+- `face_blur_regions`
+- `mouth_regions`
+- `pii_regions`
+- `plate_regions`
+- `timings`
+- `faces_to_blur`
+- `pii_count`
+- `plate_count`
 
-**Response**
-```json
-{
-  "models": {
-    "face_detection": {
-      "name": "YOLO Face Detector",
-      "version": "1.0.0",
-      "accuracy": 98.38
-    },
-    "plate_detection": {
-      "name": "License Plate Detector",
-      "version": "1.0.0",
-      "map50": 96.47
-    },
-    "audio_pii": {
-      "name": "DeBERTa PII Classifier",
-      "version": "1.0.0",
-      "accuracy": 96.99
-    }
-  }
-}
-```
+### `POST /apply-conditional-blur`
 
-## WebSocket API
+Applies blur using provided face, mouth, PII, and plate regions. This is kept for compatibility with the SFU frame path.
 
-Connect to WebSocket at `/socket.io/`
+### Enrollment Routes
 
-### Events from Client
+- `POST /face-detection`
+- `POST /face-enrollment`
+- `GET /room-status/<room_id>`
+- `DELETE /cleanup-room/<room_id>`
+- `POST /cleanup-room/<room_id>`
+- `POST /transfer-embedding`
 
-#### `create_room`
-Create a new streaming room.
-```javascript
-socket.emit('create_room');
-```
+When `REQUIRE_AUTH=true`, these routes require a valid token for the path room, source room, or target room depending on the request.
 
-#### `join_room`
-Join an existing room.
-```javascript
-socket.emit('join_room', { roomId: 'room-uuid' });
-```
+### Queue Routes
 
-#### `sfu_streaming_started`
-Notify that SFU streaming has started.
-```javascript
-socket.emit('sfu_streaming_started', { roomId: 'room-uuid' });
-```
+- `GET /queue-status`
+- `POST /queue-config`
 
-#### `start_processing`
-Start privacy filtering on the stream.
-```javascript
-socket.emit('start_processing', {
-  roomId: 'room-uuid',
-  config: {
-    face_blur: true,
-    plate_blur: true,
-    text_blur: true,
-    audio_processing: true
-  }
-});
-```
+Queue protection can reject stale frames or overload with configured status codes. Defaults are controlled by `VIDEO_FILTER_MAX_REQUEST_AGE_MS`, `VIDEO_FILTER_MAX_CONCURRENT_REQUESTS`, `VIDEO_FILTER_STALE_STATUS_CODE`, and `VIDEO_FILTER_OVERLOAD_STATUS_CODE`.
 
-### Events from Server
+## Mediasoup SFU
 
-#### `room_created`
-Room successfully created.
-```javascript
-socket.on('room_created', (data) => {
-  console.log('Room ID:', data.roomId);
-  console.log('Mediasoup URL:', data.mediasoupUrl);
-});
-```
+### `GET /health`
 
-#### `streaming_started`
-Streaming has started in the room.
-```javascript
-socket.on('streaming_started', (data) => {
-  console.log('Streaming started in room:', data.roomId);
-});
-```
+Returns SFU readiness.
 
-#### `processing_update`
-Real-time processing updates.
-```javascript
-socket.on('processing_update', (data) => {
-  console.log('FPS:', data.fps);
-  console.log('Detections:', data.detections);
-});
-```
-
-#### `error`
-Error occurred during processing.
-```javascript
-socket.on('error', (data) => {
-  console.error('Error:', data.message);
-});
-```
-
-## WebRTC SFU Integration
-
-PrivaStream uses Mediasoup for WebRTC SFU functionality on port 3001.
-
-### Connection Flow
-
-1. Client connects to main backend via WebSocket
-2. Backend creates room and returns Mediasoup endpoint
-3. Client connects to Mediasoup SFU for media transport
-4. Privacy filtering is applied to media streams in real-time
-
-### Mediasoup Endpoints
-
-- **HTTP API**: `http://localhost:3001/rooms`
-- **WebSocket**: `ws://localhost:3001/`
-
-## Configuration
-
-### Video Processing Config
-```json
-{
-  "video": {
-    "models": {
-      "face": {
-        "enabled": true,
-        "confidence": 0.4
-      },
-      "license": {
-        "enabled": true,
-        "confidence": 0.25
-      },
-      "pii_text": {
-        "enabled": true,
-        "ocr": "doctr",
-        "confidence_gate": 0.35
-      }
-    },
-    "blur": {
-      "type": "gaussian",
-      "kernel_size": 41,
-      "padding": 4
-    }
-  }
-}
-```
-
-### Audio Processing Config
-```json
-{
-  "audio": {
-    "whisper_model": "small",
-    "chunk_seconds": 5,
-    "mouth_blur_window_ms": 500
-  }
-}
-```
+Socket.IO uses `/mediasoup/socket.io`. When `REQUIRE_AUTH=true`, the client must connect with `auth: { token }`, and room-specific events are checked against the token room.
 
 ## Error Handling
 
-All API endpoints return standard HTTP status codes:
+Client errors use generic JSON responses such as:
 
-- `200` - Success
-- `400` - Bad Request (invalid parameters)
-- `404` - Not Found
-- `500` - Internal Server Error
-
-Error responses include details:
 ```json
-{
-  "error": "Invalid input format",
-  "message": "Unsupported file type: .xyz",
-  "code": "INVALID_FORMAT"
-}
+{ "error": "Invalid image data" }
 ```
 
-## Rate Limiting
+Internal exceptions are logged server-side and returned as:
 
-Currently no rate limiting is implemented. Consider implementing rate limiting for production deployments.
-
-## SDK Examples
-
-### Python
-```python
-import requests
-
-# Process video
-response = requests.post('http://localhost:5000/api/v1/process', json={
-    'input_path': 'video.mp4',
-    'output_path': 'blurred.mp4',
-    'config': {'video': {'face_detection': True}}
-})
-
-print(response.json())
+```json
+{ "error": "Internal server error" }
 ```
-
-### JavaScript
-```javascript
-// WebSocket connection
-const socket = io('http://localhost:5000');
-
-socket.emit('create_room');
-socket.on('room_created', (data) => {
-    console.log('Room created:', data.roomId);
-});
-```
-
-### cURL
-```bash
-# Health check
-curl http://localhost:5000/health
-
-# Process video
-curl -X POST http://localhost:5000/api/v1/process \
-  -H "Content-Type: application/json" \
-  -d '{"input_path": "input.mp4", "output_path": "output.mp4"}'
-```
-
-## Performance Considerations
-
-- Video processing is CPU/GPU intensive
-- Real-time streaming requires sufficient bandwidth
-- Consider using smaller models for faster processing
-- GPU acceleration significantly improves performance
-
-## Security
-
-- Validate all file paths to prevent directory traversal
-- Implement proper authentication for production
-- Use HTTPS in production environments
-- Sanitize user inputs

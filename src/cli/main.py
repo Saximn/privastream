@@ -7,13 +7,10 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-# Add privastream to path
-sys.path.append(str(Path(__file__).parent.parent.parent))
-
-from privastream.core.config import Config, WebConfig, ProductionConfig
-from privastream.core.logging import setup_logging
-from privastream.models import UnifiedBlurDetector
-from privastream.web.backend.app import create_app
+from src.core.config import Config, WebConfig, ProductionConfig
+from src.core.logging import setup_logging
+from src.models import UnifiedBlurDetector
+from src.web.backend.app import create_app
 
 
 def run_web_server(config: WebConfig = None):
@@ -38,7 +35,7 @@ def run_web_server(config: WebConfig = None):
 def process_video(input_path: str, output_path: str, config: Config = None):
     """Process a video file for PII redaction."""
     import cv2
-    from privastream.models.detection.blur_utils import apply_blur_regions
+    from src.models.detection.blur_utils import apply_blur_regions
     
     config = config or Config()
     logger = setup_logging()
@@ -111,7 +108,7 @@ def process_audio(input_path: str, output_path: str, config: Config = None):
     
     try:
         # Import audio processing modules
-        from privastream.models.audio import AudioPIIDetector
+        from src.models.audio import AudioPIIDetector
         
         # Initialize audio detector
         detector = AudioPIIDetector(config)

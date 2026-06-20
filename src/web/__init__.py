@@ -1,6 +1,11 @@
 """Web interface components for Privastream."""
 
-from .backend.app import create_app, RoomManager
-from .backend.video_filter_api import VideoFilterAPI
+__all__ = ["create_app", "RoomManager"]
 
-__all__ = ["create_app", "RoomManager", "VideoFilterAPI"]
+
+def __getattr__(name):
+    if name in __all__:
+        from .backend.app import RoomManager, create_app
+
+        return {"create_app": create_app, "RoomManager": RoomManager}[name]
+    raise AttributeError(name)

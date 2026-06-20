@@ -28,8 +28,8 @@ class ModelConfig:
     GPU_ID: int = 0
     USE_GPU: bool = True
     
-    # Model paths (relative to privastream/models/)
-    MODEL_BASE_PATH: Path = Path("privastream/models/detection")
+    # Model paths (relative to repository root)
+    MODEL_BASE_PATH: Path = Path("src/models/detection")
     FACE_MODEL_PATH: str = "face_blur/face_best.pt"
     FACE_EMBED_PATH: str = "face_blur/whitelist/creator_embedding.json" 
     PLATE_MODEL_PATH: str = "plate_blur/best.pt"

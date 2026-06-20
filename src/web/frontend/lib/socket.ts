@@ -51,7 +51,7 @@ export class SocketManager {
     })
   }
 
-  createRoom(): Promise<{ roomId: string; mediasoupUrl?: string }> {
+  createRoom(): Promise<{ roomId: string; mediasoupUrl?: string; token?: string }> {
     return new Promise((resolve) => {
       this.socket.emit('create_room')
       this.socket.on('room_created', (data) => {
@@ -60,7 +60,7 @@ export class SocketManager {
     })
   }
 
-  joinRoom(roomId: string): Promise<{ roomId: string; mediasoupUrl?: string }> {
+  joinRoom(roomId: string): Promise<{ roomId: string; mediasoupUrl?: string; token?: string }> {
     return new Promise((resolve, reject) => {
       this.socket.emit('join_room', { roomId })
       this.socket.on('joined_room', (data) => {

@@ -65,7 +65,7 @@ audio = [
 ]
 
 [project.scripts]
-privastream = "privastream.cli.main:main"
+privastream = "src.cli.main:main"
 
 [project.urls]
 Homepage = "https://github.com/privastream/tiktok-techjam-2025"
@@ -75,6 +75,9 @@ Issues = "https://github.com/privastream/tiktok-techjam-2025/issues"
 
 [tool.setuptools_scm]
 version_scheme = "post-release"
+
+[tool.setuptools.packages.find]
+include = ["src*"]
 
 [tool.black]
 line-length = 88
@@ -87,8 +90,8 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 
 [tool.pytest.ini_options]
-testpaths = ["privastream/tests"]
+testpaths = ["tests", "src/tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "--cov=privastream --cov-report=html --cov-report=term-missing"
+addopts = "--cov=src --cov-report=term-missing"
