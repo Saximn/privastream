@@ -1,15 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  experimental: {
-    // Reduce memory usage during build
-    turbo: {
-      memoryLimit: 2048
-    }
-  },
-  // Optimize compilation
-  swcMinify: true,
   // Reduce bundle size
-  webpack: (config, { dev, isServer }) => {
+  webpack: (config, { dev }) => {
     if (dev) {
       // Development optimizations
       config.optimization = {

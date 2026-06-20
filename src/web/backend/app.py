@@ -5,22 +5,20 @@ import uuid
 from dotenv import load_dotenv
 import os
 import secrets
-import sys
-from pathlib import Path
 from typing import Dict, Any, Optional
+import time
 
 load_dotenv()
 
-# Add privastream to path  
-sys.path.append(str(Path(__file__).parent.parent.parent.parent))
-from privastream.core.config import web_config
-from privastream.core.logging import logger
-import auth
+from src.core.config import web_config
+from src.core.logging import logger
+from src.web.backend import auth
 
 # Constants
 DEFAULT_MEDIASOUP_URL = 'http://localhost:3001'
 ROOM_ID_LENGTH = 8
 MAX_VOTE_BUFFER_SIZE = 3
+DEFAULT_ROOM_TTL_SECONDS = 6 * 3600
 
 
 def require_secret_key() -> str:
@@ -50,18 +48,58 @@ def allowed_origins() -> list:
 class RoomManager:
     """Manages room state and operations"""
     
-    def __init__(self):
+    def __init__(self, room_ttl_seconds: Optional[int] = None):
         self.rooms: Dict[str, Dict[str, Any]] = {}
         self.users: Dict[str, Dict[str, Any]] = {}
+        self.room_ttl_seconds = room_ttl_seconds or int(
+            os.getenv("ROOM_TTL_SECONDS", str(DEFAULT_ROOM_TTL_SECONDS))
+        )
+
+    def _now(self) -> int:
+        return int(time.time())
+
+    def cleanup_expired_rooms(self) -> int:
+        """Drop inactive rooms and associated user state."""
+        now = self._now()
+        expired = [
+            room_id
+            for room_id, room in self.rooms.items()
+            if room.get("expires_at", 0) <= now
+        ]
+        for room_id in expired:
+            self._delete_room(room_id)
+        return len(expired)
+
+    def _delete_room(self, room_id: str):
+        room = self.rooms.pop(room_id, None)
+        if not room:
+            return
+        sids = {room.get("host"), *room.get("viewers", [])}
+        for sid in filter(None, sids):
+            user = self.users.get(sid)
+            if user and user.get("room") == room_id:
+                user["room"] = None
+                user["role"] = None
+
+    def touch_room(self, room_id: str):
+        if room_id in self.rooms:
+            now = self._now()
+            self.rooms[room_id]["last_seen_at"] = now
+            self.rooms[room_id]["expires_at"] = now + self.room_ttl_seconds
     
     def create_room(self, host_sid: str) -> str:
         """Create a new room with host"""
+        self.cleanup_expired_rooms()
         # Opaque, high-entropy id (the old uuid4()[:8] was guessable/brute-forceable).
         room_id = secrets.token_urlsafe(9)
+        now = self._now()
         self.rooms[room_id] = {
             'host': host_sid,
             'viewers': [],
-            'sfu_ready': False
+            'sfu_ready': False,
+            'created_at': now,
+            'last_seen_at': now,
+            'expires_at': now + self.room_ttl_seconds,
         }
         return room_id
     
@@ -79,9 +117,12 @@ class RoomManager:
     
     def join_room(self, room_id: str, viewer_sid: str) -> bool:
         """Add viewer to room"""
+        self.cleanup_expired_rooms()
         if room_id not in self.rooms:
             return False
-        self.rooms[room_id]['viewers'].append(viewer_sid)
+        if viewer_sid not in self.rooms[room_id]['viewers']:
+            self.rooms[room_id]['viewers'].append(viewer_sid)
+        self.touch_room(room_id)
         return True
     
     def leave_room(self, room_id: str, user_sid: str, is_host: bool = False):
@@ -90,27 +131,36 @@ class RoomManager:
             return
         
         if is_host:
-            del self.rooms[room_id]
+            self._delete_room(room_id)
         else:
             self.rooms[room_id]['viewers'] = [
                 v for v in self.rooms[room_id]['viewers'] if v != user_sid
             ]
+            self.touch_room(room_id)
     
     def get_room_info(self, room_id: str) -> Optional[Dict[str, Any]]:
         """Get room information"""
+        self.cleanup_expired_rooms()
         return self.rooms.get(room_id)
     
     def set_sfu_status(self, room_id: str, status: bool):
         """Update SFU streaming status"""
         if room_id in self.rooms:
             self.rooms[room_id]['sfu_ready'] = status
+            self.touch_room(room_id)
 
 # Initialize Flask app
 app = Flask(__name__)
 app.config['SECRET_KEY'] = require_secret_key()
 CORS(app, origins=allowed_origins())
-socketio = SocketIO(app, path='/backend/socket.io', cors_allowed_origins=allowed_origins(),
-                   async_mode='threading', logger=True, engineio_logger=True)
+socketio = SocketIO(
+    app,
+    path='/backend/socket.io',
+    cors_allowed_origins=allowed_origins(),
+    async_mode=os.getenv('SOCKETIO_ASYNC_MODE', 'threading'),
+    logger=os.getenv('SOCKETIO_LOGGER', 'false').lower() == 'true',
+    engineio_logger=os.getenv('SOCKETIO_ENGINEIO_LOGGER', 'false').lower() == 'true',
+)
 
 # Configuration
 MEDIASOUP_SERVER_URL = os.getenv('MEDIASOUP_SERVER_URL', DEFAULT_MEDIASOUP_URL)
@@ -121,7 +171,13 @@ room_manager = RoomManager()
 @app.route('/health')
 def health():
     """Health check endpoint"""
-    return {'status': 'healthy'}
+    expired = room_manager.cleanup_expired_rooms()
+    return {
+        'status': 'healthy',
+        'rooms': len(room_manager.rooms),
+        'users': len(room_manager.users),
+        'expired_rooms_cleaned': expired,
+    }
 
 @socketio.on('connect')
 def handle_connect():
@@ -209,7 +265,14 @@ def handle_join_room(data):
             user['role'] = 'viewer'
             user['room'] = room_id
         
-        emit('joined_room', {'roomId': room_id, 'mediasoupUrl': MEDIASOUP_SERVER_URL})
+        token = None
+        try:
+            if os.getenv('SECRET_KEY'):
+                token = auth.issue_room_token(room_id, role='viewer')
+        except Exception as exc:
+            logger.warning(f'Could not issue viewer room token: {exc}')
+
+        emit('joined_room', {'roomId': room_id, 'mediasoupUrl': MEDIASOUP_SERVER_URL, 'token': token})
         
         # Check if streaming is already active
         room_info = room_manager.get_room_info(room_id)
@@ -288,14 +351,7 @@ def handle_get_room_info(data):
         emit('error', {'message': 'Failed to get room info'})
 
 def create_app():
-    """Application factory for Flask app."""
-    app = Flask(__name__)
-    app.config['SECRET_KEY'] = require_secret_key()
-    CORS(app, origins=allowed_origins())
-
-    socketio = SocketIO(app, path='/backend/socket.io', cors_allowed_origins=allowed_origins(),
-                       async_mode='threading', logger=True, engineio_logger=True)
-    
+    """Return the configured module-level Flask app and Socket.IO server."""
     return app, socketio
 
 if __name__ == '__main__':

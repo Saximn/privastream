@@ -9,18 +9,16 @@ from typing import List, Tuple, Dict, Any, Optional, Union
 import numpy as np
 import cv2
 
-# Add privastream to path
-sys.path.append(str(Path(__file__).parent.parent.parent.parent))
-from privastream.core.config import ModelConfig, default_config
-from privastream.core.logging import (
+from src.core.config import ModelConfig, default_config
+from src.core.logging import (
     safe_import, handle_model_errors, ModelInitializationError, 
     ModelInferenceError, logger
 )
 
 # Import model classes safely
-FaceDetector = safe_import("face_blur.face_detector", "FaceDetector", logger)
-PIIDetector = safe_import("pii_blur.pii_detector", "PIIDetector", logger)
-PlateDetector = safe_import("plate_blur.plate_detector", "PlateDetector", logger)
+FaceDetector = safe_import("src.models.detection.face_blur.face_detector", "FaceDetector", logger)
+PIIDetector = safe_import("src.models.detection.pii_blur.pii_detector", "PIIDetector", logger)
+PlateDetector = safe_import("src.models.detection.plate_blur.plate_detector", "PlateDetector", logger)
 
 
 class ModelFactory:
@@ -98,7 +96,7 @@ class UnifiedBlurDetector:
         Args:
             config: ModelConfig instance with detection settings
         """
-        self.config = config or default_config
+        self.config = config if isinstance(config, ModelConfig) else default_config
         self.models = {}
         self.enabled_models = ["face", "pii", "plate"]
         
@@ -139,7 +137,13 @@ class UnifiedBlurDetector:
         available_models = [name for name, model in self.models.items() if model is not None]
         logger.info(f"Available models: {available_models}")
     
-    def process_frame(self, frame: np.ndarray, frame_id: int) -> Dict[str, Any]:
+    def process_frame(
+        self,
+        frame: np.ndarray,
+        frame_id: int,
+        stride: int = 1,
+        room_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Process a frame with all enabled models.
         
@@ -159,7 +163,9 @@ class UnifiedBlurDetector:
         # Process with face detector
         if "face" in self.models:
             try:
-                face_frame_id, face_rectangles = self.models["face"].process_frame(frame, frame_id)
+                face_frame_id, face_rectangles = self.models["face"].process_frame(
+                    frame, frame_id, stride=stride
+                )
                 results["models"]["face"] = {
                     "frame_id": face_frame_id,
                     "rectangles": face_rectangles,
@@ -176,6 +182,7 @@ class UnifiedBlurDetector:
                 results["models"]["pii"] = {
                     "frame_id": pii_frame_id,
                     "polygons": pii_polygons,
+                    "rectangles": self._polygons_to_rectangles(pii_polygons),
                     "count": len(pii_polygons)
                 }
             except Exception as e:
@@ -196,6 +203,51 @@ class UnifiedBlurDetector:
                 results["models"]["plate"] = {"error": str(e)}
         
         return results
+
+    def update_face_embedding(self, embedding: np.ndarray):
+        """Update the active face whitelist embedding when supported."""
+        face_model = self.models.get("face")
+        if face_model is not None and hasattr(face_model, "creator_embedding"):
+            face_model.creator_embedding = embedding
+
+    def cleanup_room(self, room_id: str):
+        """Compatibility hook for room-scoped detectors."""
+        for model in self.models.values():
+            cleanup = getattr(model, "cleanup_room", None)
+            if callable(cleanup):
+                cleanup(room_id)
+
+    def process_frame_with_mouth_landmarks(
+        self,
+        frame: np.ndarray,
+        frame_id: int,
+        stride: int = 1,
+        room_id: Optional[str] = None,
+    ):
+        """Compatibility API returning face boxes and mouth landmarks if present."""
+        results = self.process_frame(frame, frame_id, stride=stride, room_id=room_id)
+        face_regions = results.get("models", {}).get("face", {}).get("rectangles", [])
+        mouth_regions = results.get("models", {}).get("mouth", {}).get("rectangles", [])
+        return frame_id, face_regions, mouth_regions
+
+    def _polygons_to_rectangles(self, polygons: List[np.ndarray]) -> List[List[int]]:
+        rectangles: List[List[int]] = []
+        for poly in polygons:
+            try:
+                arr = np.asarray(poly)
+                if arr.size == 0:
+                    continue
+                xs = arr[:, 0]
+                ys = arr[:, 1]
+                rectangles.append([
+                    int(np.min(xs)),
+                    int(np.min(ys)),
+                    int(np.max(xs)),
+                    int(np.max(ys)),
+                ])
+            except Exception:
+                continue
+        return rectangles
     
     def get_all_rectangles(self, results: Dict[str, Any]) -> List[List[int]]:
         """

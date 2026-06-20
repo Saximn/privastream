@@ -24,6 +24,7 @@ import {
 import { FacePreview } from "@/components/enrollment/facepreview";
 import { useRouter } from "next/navigation";
 import API_CONFIG from "@/lib/config";
+import { SocketManager } from "@/lib/socket";
 
 interface FaceDetection {
   bbox: [number, number, number, number]; // [x1, y1, x2, y2]
@@ -70,12 +71,14 @@ export default function EnrollmentPage() {
   const [detectedFaces, setDetectedFaces] = useState<FaceDetection[]>([]);
   const [enrollmentProgress, setEnrollmentProgress] = useState(0);
   const [roomId, setRoomId] = useState("");
+  const [roomToken, setRoomToken] = useState("");
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const detectionIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const enrollmentFramesRef = useRef<string[]>([]);
+  const backendSocketRef = useRef<SocketManager | null>(null);
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -85,15 +88,35 @@ export default function EnrollmentPage() {
     },
   });
 
-  // Generate room ID on component mount
+  // Create an enrollment room through the backend when available so video API
+  // enrollment routes can use the same signed room-token auth as streaming.
   useEffect(() => {
-    const generateRoomId = () => {
-      const id = Math.random().toString(36).substring(2, 15);
-      console.log("[ENROLLMENT] Generated room ID:", id);
-      setRoomId(id);
-      return id;
+    let cancelled = false;
+
+    const initializeEnrollmentRoom = async () => {
+      try {
+        const socket = new SocketManager();
+        backendSocketRef.current = socket;
+        await socket.connect();
+        const room = await socket.createRoom();
+        if (cancelled) return;
+        setRoomId(room.roomId);
+        setRoomToken(room.token || "");
+        console.log("[ENROLLMENT] Created backend enrollment room:", room.roomId);
+      } catch (err) {
+        const id = Math.random().toString(36).substring(2, 15);
+        if (cancelled) return;
+        console.warn("[ENROLLMENT] Falling back to local enrollment room ID:", err);
+        setRoomId(id);
+      }
     };
-    generateRoomId();
+
+    initializeEnrollmentRoom();
+
+    return () => {
+      cancelled = true;
+      backendSocketRef.current?.disconnect();
+    };
   }, []);
 
   // Initialize webcam
@@ -164,6 +187,7 @@ export default function EnrollmentPage() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...(roomToken ? { Authorization: `Bearer ${roomToken}` } : {}),
         },
         body: JSON.stringify({
           frame_data: frameData.split(",")[1], // Remove data:image/jpeg;base64, prefix
@@ -294,6 +318,7 @@ export default function EnrollmentPage() {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+            ...(roomToken ? { Authorization: `Bearer ${roomToken}` } : {}),
           },
           body: JSON.stringify({
             frames: enrollmentFramesRef.current,

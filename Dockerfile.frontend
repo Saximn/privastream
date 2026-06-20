@@ -4,14 +4,11 @@ FROM node:18-alpine
 # Set working directory
 WORKDIR /app
 
-# Copy package files
-COPY privastream/web/frontend/package*.json ./
+COPY src/web/frontend/package*.json ./
 
-# Install dependencies
 RUN npm ci --only=production
 
-# Copy frontend source
-COPY privastream/web/frontend/ ./
+COPY src/web/frontend/ ./
 
 # Build the application
 RUN npm run build

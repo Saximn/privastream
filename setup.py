@@ -78,12 +78,12 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "privastream=privastream.cli.main:main",
+            "privastream=src.cli.main:main",
         ],
     },
     include_package_data=True,
     package_data={
-        "privastream": [
+        "src": [
             "configs/*.json",
             "configs/*.yaml",
             "data/*",

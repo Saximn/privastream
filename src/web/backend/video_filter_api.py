@@ -8,13 +8,13 @@ import base64
 import cv2
 import numpy as np
 import json
-import sys
 import os
 import time
 import threading
 from datetime import datetime
 from pathlib import Path
 import logging
+from flask import g
 
 # Structured logging (levels, timestamps) replaces ad-hoc print() calls.
 # Tune verbosity with the LOG_LEVEL env var (default INFO).
@@ -47,9 +47,22 @@ def _env_int(name, default, minimum=None):
 def _latency_ms(start_time):
     return round((time.perf_counter() - start_time) * 1000, 2)
 
-# Add video_models to path
-sys.path.append(str(Path(__file__).parent.parent / "video_models"))
-from video_models.unified_detector import UnifiedBlurDetector
+from src.models.detection.unified_detector import UnifiedBlurDetector
+from src.web.backend.video_api_utils import (
+    RequestTracker,
+    cleanup_expired_embeddings,
+    decode_base64_image,
+    decode_image_bytes,
+    encode_jpeg,
+    encode_jpeg_data_url,
+    extract_model_regions,
+    is_stale_request,
+    json_header,
+    room_ids_from_request,
+    set_embedding_expiry,
+    strip_data_url,
+    apply_blur_region,
+)
 
 # InsightFace imports for face enrollment
 try:
@@ -74,7 +87,7 @@ app = Flask(__name__)
 CORS(app, origins=allowed_origins())
 
 from functools import wraps
-import auth
+from src.web.backend import auth
 
 
 def require_room_token(f):
@@ -91,9 +104,14 @@ def require_room_token(f):
         header = request.headers.get('Authorization', '')
         token = header[7:] if header.startswith('Bearer ') else header
         body = request.get_json(silent=True) or {}
-        room_id = kwargs.get('room_id') or body.get('room_id')
-        if auth.verify_room_token(token, room_id) is None:
+        header_room_id = request.headers.get("X-Room-Id") or request.args.get("room_id")
+        if header_room_id:
+            body = {**body, "room_id": header_room_id}
+        payload = auth.verify_room_token(token, None)
+        room_ids = room_ids_from_request(kwargs.get("room_id"), body)
+        if payload is None or (room_ids and payload.get("room_id") not in room_ids):
             return jsonify({"error": "Unauthorized"}), 401
+        g.room_token_payload = payload
         return f(*args, **kwargs)
     return wrapper
 
@@ -135,49 +153,59 @@ QUEUE_CONFIG = {
     "overload_status_code": _env_int("VIDEO_FILTER_OVERLOAD_STATUS_CODE", 503, minimum=400),
     "stale_status_code": _env_int("VIDEO_FILTER_STALE_STATUS_CODE", 429, minimum=400),
 }
+EMBEDDING_TTL_SECONDS = _env_int("ROOM_EMBEDDING_TTL_SECONDS", 6 * 3600, minimum=60)
 
 detector = None
 face_app = None  # Global face detection instance for enrollment
 room_embeddings = {}  # Store face embeddings per room: roomId -> {'embedding': np.array, 'metadata': {...}}
 active_requests = 0  # Track concurrent processing requests
 request_lock = threading.Lock()  # Thread lock for request counting
+request_tracker = RequestTracker(QUEUE_CONFIG["max_concurrent_requests"])
 
 def is_request_stale(request_timestamp_ms):
     """Check if request is too old to process."""
-    if not QUEUE_CONFIG["enable_request_dropping"]:
-        return False
-    
-    current_time_ms = int(time.time() * 1000)
-    request_age_ms = current_time_ms - request_timestamp_ms
+    stale = is_stale_request(
+        request_timestamp_ms,
+        QUEUE_CONFIG["max_request_age_ms"],
+        enabled=QUEUE_CONFIG["enable_request_dropping"],
+    )
     
     if QUEUE_CONFIG["queue_monitoring"]:
-        logger.debug(f"[QUEUE] Request age: {request_age_ms}ms (max: {QUEUE_CONFIG['max_request_age_ms']}ms)")
+        logger.debug(
+            "[QUEUE] Request timestamp=%s max_age=%sms stale=%s",
+            request_timestamp_ms,
+            QUEUE_CONFIG["max_request_age_ms"],
+            stale,
+        )
     
-    return request_age_ms > QUEUE_CONFIG["max_request_age_ms"]
+    return stale
 
 def can_process_request():
     """Check if we can process another request (not at concurrent limit)."""
-    with request_lock:
-        can_process = active_requests < QUEUE_CONFIG["max_concurrent_requests"]
-        if QUEUE_CONFIG["queue_monitoring"]:
-            logger.debug(f"[QUEUE] Active requests: {active_requests}/{QUEUE_CONFIG['max_concurrent_requests']}, Can process: {can_process}")
-        return can_process
+    request_tracker.configure(QUEUE_CONFIG["max_concurrent_requests"])
+    can_process = request_tracker.can_start()
+    if QUEUE_CONFIG["queue_monitoring"]:
+        logger.debug(
+            "[QUEUE] Active requests: %s/%s, Can process: %s",
+            request_tracker.active,
+            request_tracker.max_concurrent,
+            can_process,
+        )
+    return can_process
 
 def start_request_processing():
     """Mark start of request processing."""
     global active_requests
-    with request_lock:
-        active_requests += 1
-        if QUEUE_CONFIG["queue_monitoring"]:
-            logger.debug(f"[QUEUE] Started processing request, active: {active_requests}")
+    active_requests = request_tracker.start()
+    if QUEUE_CONFIG["queue_monitoring"]:
+        logger.debug(f"[QUEUE] Started processing request, active: {active_requests}")
 
 def finish_request_processing():
     """Mark end of request processing."""
     global active_requests
-    with request_lock:
-        active_requests = max(0, active_requests - 1)  # Prevent negative counts
-        if QUEUE_CONFIG["queue_monitoring"]:
-            logger.debug(f"[QUEUE] Finished processing request, active: {active_requests}")
+    active_requests = request_tracker.finish()
+    if QUEUE_CONFIG["queue_monitoring"]:
+        logger.debug(f"[QUEUE] Finished processing request, active: {active_requests}")
 
 def setup_debug_directories():
     """Create debug output directories if they don't exist."""
@@ -267,7 +295,7 @@ def init_detector():
     global detector, face_app
     if detector is None:
         try:
-            detector = UnifiedBlurDetector(DETECTOR_CONFIG)
+            detector = UnifiedBlurDetector()
             logger.info("[API] Video filter detector initialized")
             
             # Set up debug directories
@@ -334,11 +362,10 @@ def filter_frame(frame, frame_id=0, blur_only=False, provided_rectangles=None, r
         results = detector.process_frame(frame, frame_id, stride=DETECTION_STRIDE, room_id=room_id)
         timings["detect_ms"] = _latency_ms(detect_start)
         
-        # Extract rectangles from detection results
-        for model_name in ["face", "plate", "pii"]:
-            model_data = results.get("models", {}).get(model_name, {})
-            if "rectangles" in model_data:
-                rectangles.extend(model_data["rectangles"])
+        regions = extract_model_regions(results)
+        rectangles.extend(regions["face"])
+        rectangles.extend(regions["plate"])
+        rectangles.extend(regions["pii"])
         
         logger.info(f"[API] Detected {len(rectangles)} regions")
         
@@ -356,21 +383,8 @@ def filter_frame(frame, frame_id=0, blur_only=False, provided_rectangles=None, r
     blur_applied = 0
     for rect in rectangles:
         try:
-            if len(rect) == 4:
-                x1, y1, x2, y2 = rect
-                # Convert to x, y, w, h format if needed
-                if x2 < x1: x1, x2 = x2, x1
-                if y2 < y1: y1, y2 = y2, y1
-                
-                x, y = int(x1), int(y1)
-                w, h = int(x2 - x1), int(y2 - y1)
-                
-                # Bounds check
-                if x >= 0 and y >= 0 and x + w <= frame.shape[1] and y + h <= frame.shape[0] and w > 0 and h > 0:
-                    roi = frame[y:y+h, x:x+w]
-                    if roi.size > 0:
-                        frame[y:y+h, x:x+w] = cv2.blur(roi, (75, 75))
-                        blur_applied += 1
+            if apply_blur_region(frame, rect, kernel_size=75):
+                blur_applied += 1
         except Exception as e:
             logger.error(f"[API] Error blurring rectangle {rect}: {e}")
     
@@ -382,9 +396,7 @@ def filter_frame(frame, frame_id=0, blur_only=False, provided_rectangles=None, r
     
     # Encode frame as base64 JPEG
     encode_start = time.perf_counter()
-    _, buffer = cv2.imencode('.jpg', frame)
-    frame_b64 = base64.b64encode(buffer).decode('utf-8')
-    frame_b64 = f"data:image/jpeg;base64,{frame_b64}"
+    frame_b64 = encode_jpeg_data_url(frame, quality=85)
     timings["encode_ms"] = _latency_ms(encode_start)
     timings["total_ms"] = _latency_ms(total_start)
     
@@ -392,7 +404,13 @@ def filter_frame(frame, frame_id=0, blur_only=False, provided_rectangles=None, r
 
 @app.route('/health')
 def health():
-    return {'status': 'healthy', 'detector_ready': detector is not None and detector != "failed"}
+    expired = cleanup_expired_embeddings(room_embeddings, EMBEDDING_TTL_SECONDS)
+    return {
+        'status': 'healthy',
+        'detector_ready': detector is not None and detector != "failed",
+        'room_embeddings': len(room_embeddings),
+        'expired_embeddings_cleaned': expired,
+    }
 
 @app.route('/process-frame', methods=['POST'])
 @require_room_token
@@ -442,15 +460,11 @@ def process_frame_route():
         try:
             decode_start = time.perf_counter()
             frame_data = data['frame']
-            if frame_data.startswith('data:image'):
-                frame_data = frame_data.split(',')[1]
-
-            img_bytes = base64.b64decode(frame_data)
-            img_array = np.frombuffer(img_bytes, dtype=np.uint8)
-            frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-            decode_ms = _latency_ms(decode_start)
-            if frame is None:
+            try:
+                frame = decode_base64_image(frame_data)
+            except ValueError:
                 return jsonify({"error": "Invalid image data"}), 400
+            decode_ms = _latency_ms(decode_start)
 
             blur_only = data.get('blur_only', False)
             provided_rectangles = data.get('rectangles', [])
@@ -502,6 +516,101 @@ def process_frame_route():
         
         logger.error(f"[API] Frame processing error: {e}")
         logger.exception("Unhandled error during request")
+        return jsonify({"error": "Internal server error"}), 500
+
+@app.route('/process-frame-binary', methods=['POST'])
+@require_room_token
+def process_frame_binary_route():
+    """Binary frame variant of /process-frame.
+
+    Request body is encoded image bytes. Metadata is carried in headers:
+    X-Room-Id, X-Frame-Id, X-Timestamp-Ms, X-Blur-Only, and X-Rectangles.
+    The response body is image/jpeg unless X-Detect-Only is true, in which
+    case JSON metadata is returned.
+    """
+    processing_started = False
+
+    try:
+        room_id = request.headers.get("X-Room-Id") or request.args.get("room_id")
+        frame_id = int(request.headers.get("X-Frame-Id", "0"))
+        request_timestamp = request.headers.get("X-Timestamp-Ms", str(int(time.time() * 1000)))
+
+        if is_request_stale(request_timestamp):
+            return jsonify({
+                "success": False,
+                "error": "Request too old",
+                "frame_id": frame_id,
+                "dropped": True,
+                "reason": "stale_request",
+            }), QUEUE_CONFIG["stale_status_code"]
+
+        if not can_process_request():
+            return jsonify({
+                "success": False,
+                "error": "Server overloaded",
+                "frame_id": frame_id,
+                "dropped": True,
+                "reason": "overloaded",
+            }), QUEUE_CONFIG["overload_status_code"]
+
+        start_request_processing()
+        processing_started = True
+
+        try:
+            decode_start = time.perf_counter()
+            try:
+                frame = decode_image_bytes(request.get_data())
+            except ValueError:
+                return jsonify({"error": "Invalid image data"}), 400
+            decode_ms = _latency_ms(decode_start)
+
+            rectangles_header = request.headers.get("X-Rectangles", "[]")
+            try:
+                provided_rectangles = json.loads(rectangles_header)
+            except json.JSONDecodeError:
+                return jsonify({"error": "Invalid X-Rectangles header"}), 400
+
+            blur_only = request.headers.get("X-Blur-Only", "false").lower() in {"1", "true", "yes"}
+            detect_only = request.headers.get("X-Detect-Only", "false").lower() in {"1", "true", "yes"}
+            processed_frame_b64, rectangles, timings = filter_frame(
+                frame,
+                frame_id,
+                blur_only=blur_only,
+                provided_rectangles=provided_rectangles,
+                room_id=room_id,
+                detect_only=detect_only,
+            )
+            timings["decode_ms"] = decode_ms
+            timings["total_ms"] = round(timings.get("total_ms", 0.0) + decode_ms, 2)
+
+            if detect_only:
+                return jsonify({
+                    "success": True,
+                    "frame_id": frame_id,
+                    "rectangles": rectangles,
+                    "processing_mode": "detect_only",
+                    "regions_processed": len(rectangles),
+                    "timings": timings,
+                })
+
+            jpeg_bytes = base64.b64decode(strip_data_url(processed_frame_b64))
+            response = app.response_class(jpeg_bytes, mimetype="image/jpeg")
+            response.headers["X-Frame-Id"] = str(frame_id)
+            response.headers["X-Regions-Processed"] = str(len(rectangles))
+            response.headers["X-Timings"] = json_header(timings)
+            return response
+
+        finally:
+            if processing_started:
+                finish_request_processing()
+
+    except Exception:
+        if processing_started:
+            try:
+                finish_request_processing()
+            except Exception:
+                pass
+        logger.exception("Unhandled error during binary frame processing")
         return jsonify({"error": "Internal server error"}), 500
 
 @app.route('/detector-info')
@@ -609,19 +718,17 @@ def cleanup_debug_images_endpoint():
 @app.route('/queue-status')
 def queue_status():
     """Get current queue and processing status."""
-    global active_requests
-    with request_lock:
-        return jsonify({
-            "active_requests": active_requests,
-            "max_concurrent": QUEUE_CONFIG["max_concurrent_requests"],
-            "can_accept_new": active_requests < QUEUE_CONFIG["max_concurrent_requests"],
-            "max_request_age_ms": QUEUE_CONFIG["max_request_age_ms"],
-            "request_dropping_enabled": QUEUE_CONFIG["enable_request_dropping"],
-            "queue_monitoring": QUEUE_CONFIG["queue_monitoring"],
-            "overload_status_code": QUEUE_CONFIG["overload_status_code"],
-            "stale_status_code": QUEUE_CONFIG["stale_status_code"],
-            "current_time_ms": int(time.time() * 1000)
-        })
+    return jsonify({
+        "active_requests": request_tracker.active,
+        "max_concurrent": QUEUE_CONFIG["max_concurrent_requests"],
+        "can_accept_new": request_tracker.can_start(),
+        "max_request_age_ms": QUEUE_CONFIG["max_request_age_ms"],
+        "request_dropping_enabled": QUEUE_CONFIG["enable_request_dropping"],
+        "queue_monitoring": QUEUE_CONFIG["queue_monitoring"],
+        "overload_status_code": QUEUE_CONFIG["overload_status_code"],
+        "stale_status_code": QUEUE_CONFIG["stale_status_code"],
+        "current_time_ms": int(time.time() * 1000)
+    })
 
 @app.route('/queue-config', methods=['POST'])
 def update_queue_config():
@@ -647,6 +754,7 @@ def update_queue_config():
             QUEUE_CONFIG["max_request_age_ms"] = int(data["max_request_age_ms"])
         if "max_concurrent_requests" in data:
             QUEUE_CONFIG["max_concurrent_requests"] = int(data["max_concurrent_requests"])
+            request_tracker.configure(QUEUE_CONFIG["max_concurrent_requests"])
         if "enable_request_dropping" in data:
             QUEUE_CONFIG["enable_request_dropping"] = bool(data["enable_request_dropping"])
         if "queue_monitoring" in data:
@@ -703,18 +811,8 @@ def face_detection():
         
         # Decode base64 image
         try:
-            image_bytes = base64.b64decode(frame_data)
-            nparr = np.frombuffer(image_bytes, np.uint8)
-            image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            
-            if image is None:
-                return jsonify({
-                    'success': False,
-                    'error': 'Failed to decode image',
-                    'faces_detected': []
-                }), 400
-                
-        except Exception as e:
+            image = decode_base64_image(frame_data)
+        except ValueError:
             logger.exception("Image decode error")
             return jsonify({
                 'success': False,
@@ -804,13 +902,7 @@ def face_enrollment():
         for i, frame_data in enumerate(frames):
             try:
                 # Decode base64 image
-                image_bytes = base64.b64decode(frame_data)
-                nparr = np.frombuffer(image_bytes, np.uint8)
-                image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                
-                if image is None:
-                    logger.error(f"[ENROLLMENT] Failed to decode frame {i}")
-                    continue
+                image = decode_base64_image(frame_data)
                 
                 # Extract embeddings from this frame - SELECT MAX SIZE FACE ONLY
                 faces = face_app.get(image)
@@ -853,7 +945,7 @@ def face_enrollment():
             average_embedding = all_embeddings[0]
         
         # Store in room embeddings
-        room_embeddings[room_id] = {
+        room_embeddings[room_id] = set_embedding_expiry({
             'embedding': average_embedding,
             'metadata': {
                 'enrollment_time': datetime.now().isoformat(),
@@ -861,7 +953,7 @@ def face_enrollment():
                 'valid_frames': valid_frames,
                 'embeddings_count': len(all_embeddings)
             }
-        }
+        }, EMBEDDING_TTL_SECONDS)
         
         logger.info(f"[ENROLLMENT] ✅ Face enrollment complete for room {room_id}")
         logger.info(f"[ENROLLMENT]    Processed: {valid_frames}/{len(frames)} frames")
@@ -883,9 +975,11 @@ def face_enrollment():
         }), 500
 
 @app.route('/room-status/<room_id>', methods=['GET'])
+@require_room_token
 def get_room_status(room_id: str):
     """Get enrollment status for a room"""
     try:
+        cleanup_expired_embeddings(room_embeddings, EMBEDDING_TTL_SECONDS)
         if room_id in room_embeddings:
             metadata = room_embeddings[room_id]['metadata']
             return jsonify({
@@ -906,6 +1000,7 @@ def get_room_status(room_id: str):
         }), 500
 
 @app.route('/cleanup-room/<room_id>', methods=['DELETE'])
+@require_room_token
 def cleanup_room(room_id: str):
     """Clean up enrollment data for a room"""
     try:
@@ -977,15 +1072,11 @@ def detect_faces_and_mouths():
             total_start = time.perf_counter()
             # Decode frame
             decode_start = time.perf_counter()
-            if frame_data.startswith('data:image'):
-                frame_data = frame_data.split(',')[1]
-            img_bytes = base64.b64decode(frame_data)
-            img_array = np.frombuffer(img_bytes, dtype=np.uint8)
-            frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-            timings["decode_ms"] = _latency_ms(decode_start)
-            
-            if frame is None:
+            try:
+                frame = decode_base64_image(frame_data)
+            except ValueError:
                 return jsonify({"error": "Invalid image data"}), 400
+            timings["decode_ms"] = _latency_ms(decode_start)
             
             # Initialize detector if needed
             if detector is None:
@@ -1005,28 +1096,20 @@ def detect_faces_and_mouths():
             # Log processing mode
             logger.info(f"[API] Processing frame {frame_id} in FAST_DETECTION mode (face+mouth+PII+plate)")
                 
-            # STAGE 1: Get face blur regions and mouth landmarks
             start_time = time.time()
-            frame_id_result, face_blur_regions, mouth_regions = detector.process_frame_with_mouth_landmarks(
-                frame, frame_id, stride=1, room_id=room_id
-            )
-            
-            # STAGE 2: Get PII and plate detections (run full unified detection)
             full_results = detector.process_frame(frame, frame_id, stride=1, room_id=room_id)
-            
-            # Extract PII and plate rectangles from full results
-            pii_regions = []
-            plate_regions = []
-            
-            pii_data = full_results.get("models", {}).get("pii", {})
-            if "rectangles" in pii_data:
-                pii_regions = pii_data["rectangles"]
-                logger.info(f"[API] 🔍 PII detection found {len(pii_regions)} regions")
-            
-            plate_data = full_results.get("models", {}).get("plate", {})
-            if "rectangles" in plate_data:
-                plate_regions = plate_data["rectangles"]
-                logger.info(f"[API] 🔍 Plate detection found {len(plate_regions)} regions")
+            regions = extract_model_regions(full_results)
+            face_blur_regions = regions["face"]
+            mouth_regions = regions["mouth"]
+            pii_regions = regions["pii"]
+            plate_regions = regions["plate"]
+            logger.info(
+                "[API] Detection found face=%s mouth=%s pii=%s plate=%s",
+                len(face_blur_regions),
+                len(mouth_regions),
+                len(pii_regions),
+                len(plate_regions),
+            )
                 
             detection_time = time.time() - start_time
             timings["detect_ms"] = round(detection_time * 1000, 2)
@@ -1087,35 +1170,31 @@ def apply_conditional_blur():
         
         # Decode frame
         decode_start = time.perf_counter()
-        if frame_data.startswith('data:image'):
-            frame_data = frame_data.split(',')[1]
-        img_bytes = base64.b64decode(frame_data)
-        img_array = np.frombuffer(img_bytes, dtype=np.uint8)
-        frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-        timings["decode_ms"] = _latency_ms(decode_start)
-        
-        if frame is None:
+        try:
+            frame = decode_base64_image(frame_data)
+        except ValueError:
             return jsonify({"error": "Invalid image data"}), 400
+        timings["decode_ms"] = _latency_ms(decode_start)
         
         blur_start = time.perf_counter()
         # Apply face blurring (always - privacy protection)
         faces_blurred = 0
         for region in face_blur_regions:
-            apply_gaussian_blur_region(frame, region)
-            faces_blurred += 1
+            if apply_gaussian_blur_region(frame, region):
+                faces_blurred += 1
         
         # Apply PII blurring (always - privacy protection)
         pii_blurred = 0
         for region in pii_regions:
-            apply_gaussian_blur_region(frame, region)
-            pii_blurred += 1
+            if apply_gaussian_blur_region(frame, region):
+                pii_blurred += 1
         logger.info(f"[API] 🔒 Applied PII blur to {pii_blurred} regions")
         
         # Apply plate blurring (always - privacy protection)
         plates_blurred = 0
         for region in plate_regions:
-            apply_gaussian_blur_region(frame, region)
-            plates_blurred += 1
+            if apply_gaussian_blur_region(frame, region):
+                plates_blurred += 1
         logger.info(f"[API] 🚗 Applied plate blur to {plates_blurred} regions")
         
         # Apply mouth blurring (conditional - PII protection)
@@ -1140,16 +1219,7 @@ def apply_conditional_blur():
         # Encode result
         try:
             encode_start = time.perf_counter()
-            encode_result = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            if len(encode_result) != 2:
-                logger.warning(f"[API] Warning: cv2.imencode returned {len(encode_result)} values instead of 2")
-                return jsonify({"error": "Image encoding failed"}), 500
-            
-            success, buffer = encode_result
-            if not success:
-                return jsonify({"error": "Failed to encode image"}), 500
-                
-            frame_b64 = base64.b64encode(buffer).decode('utf-8')
+            frame_b64 = base64.b64encode(encode_jpeg(frame, quality=85)).decode('utf-8')
             timings["encode_ms"] = _latency_ms(encode_start)
         except Exception as e:
             logger.error(f"[API] Image encoding error: {e}")
@@ -1176,17 +1246,7 @@ def apply_conditional_blur():
 
 def apply_gaussian_blur_region(frame, region):
     """Apply Gaussian blur to a specific region"""
-    x1, y1, x2, y2 = map(int, region)
-    h, w = frame.shape[:2]
-    
-    # Bounds check
-    x1, y1 = max(0, x1), max(0, y1)
-    x2, y2 = min(w, x2), min(h, y2)
-    
-    if x2 > x1 and y2 > y1:
-        roi = frame[y1:y2, x1:x2]
-        if roi.size > 0:
-            frame[y1:y2, x1:x2] = cv2.blur(roi, (75, 75))
+    return apply_blur_region(frame, region, kernel_size=75)
 
 def apply_landmark_mouth_blur(frame, mouth_landmarks):
     """Apply rectangular blur using mouth landmarks to determine bounds"""
@@ -1227,21 +1287,10 @@ def apply_landmark_mouth_blur(frame, mouth_landmarks):
 
 def apply_strong_mouth_blur(frame, mouth_bbox):
     """Strong blur for mouth region using bbox"""
-    x1, y1, x2, y2 = map(int, mouth_bbox)
-    h, w = frame.shape[:2]
-    
-    # Bounds check
-    x1, y1 = max(0, x1), max(0, y1) 
-    x2, y2 = min(w, x2), min(h, y2)
-    
-    if x2 > x1 and y2 > y1:
-        roi = frame[y1:y2, x1:x2]
-        if roi.size > 0:
-            # Very strong blur for mouth (higher than face blur)
-            blurred = cv2.blur(roi, (150, 150))
-            frame[y1:y2, x1:x2] = blurred
+    return apply_blur_region(frame, mouth_bbox, kernel_size=150)
 
 @app.route('/cleanup-room/<room_id>', methods=['POST'])
+@require_room_token
 def cleanup_room_endpoint(room_id: str):
     """Clean up all room-specific data."""
     global detector, room_embeddings
@@ -1267,6 +1316,7 @@ def cleanup_room_endpoint(room_id: str):
         return jsonify({"error": "Internal server error"}), 500
 
 @app.route('/transfer-embedding', methods=['POST'])
+@require_room_token
 def transfer_embedding():
     """Transfer face embedding from enrollment room to streaming room."""
     global room_embeddings
@@ -1283,7 +1333,10 @@ def transfer_embedding():
             return jsonify({"error": f"Source room {from_room_id} has no embedding"}), 404
         
         # Copy embedding to new room
-        room_embeddings[to_room_id] = room_embeddings[from_room_id].copy()
+        room_embeddings[to_room_id] = set_embedding_expiry(
+            room_embeddings[from_room_id].copy(),
+            EMBEDDING_TTL_SECONDS,
+        )
         logger.info(f"[API] 🔄 Transferred embedding from room {from_room_id} to room {to_room_id}")
         logger.info(f"[API] 🔄 Available rooms after transfer: {list(room_embeddings.keys())}")
         

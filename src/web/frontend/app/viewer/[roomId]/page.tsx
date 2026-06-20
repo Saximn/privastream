@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { io, Socket } from "socket.io-client";
 import * as mediasoupClient from "mediasoup-client";
 import API_CONFIG from "@/lib/config";
+import { SocketManager } from "@/lib/socket";
 
 interface ViewerStats {
   connected: boolean;
@@ -38,6 +39,7 @@ export default function Viewer() {
   const [streamAvailable, setStreamAvailable] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const backendSocketRef = useRef<SocketManager | null>(null);
   const sfuSocketRef = useRef<Socket | null>(null);
   const deviceRef = useRef<mediasoupClient.Device | null>(null);
   const consumerTransportRef = useRef<mediasoupClient.types.Transport | null>(
@@ -66,13 +68,19 @@ export default function Viewer() {
         setError("");
         setConnectionState("connecting");
         console.log("[VIEWER] Initializing for room:", roomId);
+
+        backendSocketRef.current = new SocketManager();
+        await backendSocketRef.current.connect();
+        const backendJoin = await backendSocketRef.current.joinRoom(roomId);
+        const roomToken = backendJoin.token;
         
         // Connect to SFU server
         console.log("[VIEWER] Connecting to SFU server...");
         sfuSocketRef.current = io(API_CONFIG.SFU_URL, {
           path:"/mediasoup/socket.io",
           transports: ["websocket"],
-          reconnectionAttempts: 3
+          reconnectionAttempts: 3,
+          auth: { token: roomToken }
         });
         
         setupEventHandlers();
@@ -550,6 +558,7 @@ export default function Viewer() {
       if (sfuSocketRef.current) {
         sfuSocketRef.current.disconnect();
       }
+      backendSocketRef.current?.disconnect();
 
       // Clear processed frames and streams
       processedFramesRef.current.clear();
