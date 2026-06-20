@@ -266,6 +266,10 @@ python -m privastream.tools.benchmark --duration 60
 python -m privastream.tests.test_models
 ```
 
+### **Backend Framework Decisions**
+
+See [Backend Framework Analysis](docs/BACKEND_FRAMEWORK_ANALYSIS.md) for the current recommendation on Flask, FastAPI, Rust, C#, and Go migration options.
+
 ## 🤝 Contributing
 
 We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
